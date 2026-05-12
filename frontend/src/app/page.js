@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 
-export default function Inicio() {
+export default function InicioSesion() {
   const router = useRouter()
   const [nombreUsuario, setNombreUsuario] = useState("")
   const [contrasena, setContrasena] = useState("")
@@ -11,6 +11,7 @@ export default function Inicio() {
 
   const manejarLogin = async (e) => {
     e.preventDefault()
+    setMensaje("")
 
     try {
       const respuesta = await fetch("http://127.0.0.1:8000/iniciar-sesion", {
@@ -30,7 +31,9 @@ export default function Inicio() {
       }
 
       localStorage.setItem("nombre_usuario", datos.nombre_usuario)
-      router.push("/dashboard")
+
+      // ✅ Después de login: ir a sala neutral
+      router.push("/inicio")
     } catch {
       setMensaje("No se pudo conectar con el backend")
     }
@@ -39,13 +42,18 @@ export default function Inicio() {
   return (
     <main className="pagina-inicio">
       <section className="tarjeta-inicio">
-        <div className="insignia-inicio">CYBERLAB</div>
+        <div className="logo-login">
+  <img
+    src="/logo-cyberlab.png"
+    alt="CyberLab"
+    className="logo-login-img"
+  />
+</div>
 
-        <h1 className="titulo-inicio">Acceso al sistema</h1>
+        
 
         <p className="subtitulo-inicio">
-          Plataforma web de entrenamiento práctico para análisis de eventos,
-          simulación de ataques y respuesta ante incidentes en entornos controlados.
+          Ingresa con tus credenciales para acceder a la plataforma.
         </p>
 
         <form onSubmit={manejarLogin} className="formulario-inicio">
@@ -66,7 +74,7 @@ export default function Inicio() {
           />
 
           <button type="submit" className="boton-principal">
-            Ingresar al sistema
+            Ingresar
           </button>
         </form>
 

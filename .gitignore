@@ -20,3 +20,7 @@ venv/
 *.sqlite3
 cyberlab.db
 backend/cyberlab.db
+
+# secretos (NO subir)
+backend/.env
+.env

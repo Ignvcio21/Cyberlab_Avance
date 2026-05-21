@@ -6,18 +6,24 @@ import { useRouter } from "next/navigation"
 export default function BarraSuperior({ paginaActiva }) {
   const router = useRouter()
   const [nombreUsuario, setNombreUsuario] = useState("")
+  const [rolUsuario, setRolUsuario] = useState("")
 
   useEffect(() => {
     const u = localStorage.getItem("nombre_usuario") || ""
+    const r = localStorage.getItem("rol_usuario") || ""
     setNombreUsuario(u)
+    setRolUsuario(r)
   }, [])
 
   const ir = (ruta) => router.push(ruta)
 
   const salir = () => {
     localStorage.removeItem("nombre_usuario")
+    localStorage.removeItem("rol_usuario")
     router.push("/")
   }
+
+  const puedeVerPanel = rolUsuario === "admin" || rolUsuario === "docente"
 
   return (
     <header className="barra-superior">
@@ -53,6 +59,16 @@ export default function BarraSuperior({ paginaActiva }) {
         >
           Información
         </button>
+
+        {puedeVerPanel ? (
+          <button
+            className={`pildora-nav ${paginaActiva === "panel" ? "activa" : ""}`}
+            onClick={() => ir("/panel")}
+            type="button"
+          >
+            Panel
+          </button>
+        ) : null}
       </nav>
 
       <div className="barra-derecha">

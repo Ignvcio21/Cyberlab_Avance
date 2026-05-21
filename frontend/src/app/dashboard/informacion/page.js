@@ -103,6 +103,27 @@ export default function InformacionDashboard() {
     return Math.round((vistos / total) * 100)
   }
 
+  const leccionIdBackend = (nivel, seccion) => {
+    const index = SECCIONES.findIndex((s) => s.id === seccion)
+    if (index < 0) return null
+    return (nivel - 1) * SECCIONES.length + (index + 1)
+  }
+
+  const enviarProgresoABackend = async (leccionId, porcentaje) => {
+    if (!nombreUsuario || !leccionId) return
+    try {
+      await fetch("http://127.0.0.1:8000/progreso/actualizar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nombre_usuario: nombreUsuario,
+          leccion_id: leccionId,
+          porcentaje
+        })
+      })
+    } catch {}
+  }
+
   const marcarSeccionComoVistaSiCorresponde = () => {
     const clave = `nivel${nivelLeccion}`
     const yaVista = !!seccionesVistas?.[clave]?.[seccionLeccion]
@@ -128,6 +149,9 @@ export default function InformacionDashboard() {
         seccionesVistas: nuevo
       })
     )
+
+    const leccionId = leccionIdBackend(nivelLeccion, seccionLeccion)
+    if (leccionId) enviarProgresoABackend(leccionId, 100)
   }
 
   useEffect(() => {
@@ -217,158 +241,152 @@ export default function InformacionDashboard() {
   const progresoNivelActual = progresoLecturaNivel(nivelLeccion)
 
   return (
-    <GuardSesion> 
+    <GuardSesion>
       <TransicionPagina>
-      <main className="dashboard-page">
-        <BarraSuperior paginaActiva="informacion" />
+        <main className="dashboard-page">
+          <BarraSuperior paginaActiva="informacion" />
 
-        <div className="dashboard-container">
-          <header className="hero-panel">
-            <div>
-              <div className="hero-badge">CONTENIDO DIDÁCTICO CYBERLAB</div>
-              <h1 className="hero-title">Información del nivel</h1>
-              <p className="hero-subtitle">
-                Operador activo: <strong>{nombreUsuario}</strong>
-              </p>
-            </div>
+          <div className="dashboard-container">
+            <header className="hero-panel">
+              <div>
+                <div className="hero-badge">CONTENIDO DIDÁCTICO CYBERLAB</div>
+                <h1 className="hero-title">Información del nivel</h1>
+                <p className="hero-subtitle">
+                  Operador activo: <strong>{nombreUsuario}</strong>
+                </p>
+              </div>
 
-            <button onClick={() => router.push("/dashboard")} className="logout-button">
-              Volver
-            </button>
-          </header>
+              <button onClick={() => router.push("/dashboard")} className="logout-button">
+                Volver
+              </button>
+            </header>
 
-          <section className="learning-panel">
-            <div className="info-layout">
-              {/* Panel 1: Niveles */}
-              <aside className="info-panel">
-                <div className="info-panel-header">
-                  <div>
-                    <div className="info-panel-title">Niveles</div>
-                    <div className="info-panel-sub">Progreso por lectura</div>
+            <section className="learning-panel">
+              <div className="info-layout">
+                <aside className="info-panel">
+                  <div className="info-panel-header">
+                    <div>
+                      <div className="info-panel-title">Niveles</div>
+                      <div className="info-panel-sub">Progreso por lectura</div>
+                    </div>
                   </div>
-                </div>
 
-                <div className="info-scroll">
-                  <div className="info-list">
-                    {NIVELES.map((n) => {
-                      const bloqueado = !puedeAccederNivel(n.id)
-                      const activo = nivelLeccion === n.id
-                      const progreso = progresoLecturaNivel(n.id)
+                  <div className="info-scroll">
+                    <div className="info-list">
+                      {NIVELES.map((n) => {
+                        const bloqueado = !puedeAccederNivel(n.id)
+                        const activo = nivelLeccion === n.id
+                        const progreso = progresoLecturaNivel(n.id)
 
-                      return (
-                        <button
-                          key={n.id}
-                          className={`info-item ${activo ? "activo" : ""}`}
-                          onClick={() => {
-                            if (bloqueado) return
-                            setNivelLeccion(n.id)
-                            setSeccionLeccion("introduccion")
-                            guardarStorage({ nivelLeccion: n.id, seccionLeccion: "introduccion" })
-                            window.scrollTo({ top: 0, behavior: "smooth" })
-                          }}
-                          disabled={bloqueado}
-                          title={
-                            bloqueado
-                              ? "Bloqueado: completa el Nivel 1 práctico para desbloquear niveles avanzados"
-                              : ""
-                          }
-                        >
-                          <div className="info-item-top">
-                            <div className="info-item-name">
-                              Nivel {n.id}: {n.titulo}
+                        return (
+                          <button
+                            key={n.id}
+                            className={`info-item ${activo ? "activo" : ""}`}
+                            onClick={() => {
+                              if (bloqueado) return
+                              setNivelLeccion(n.id)
+                              setSeccionLeccion("introduccion")
+                              guardarStorage({ nivelLeccion: n.id, seccionLeccion: "introduccion" })
+                              window.scrollTo({ top: 0, behavior: "smooth" })
+                            }}
+                            disabled={bloqueado}
+                            title={
+                              bloqueado
+                                ? "Bloqueado: completa el Nivel 1 práctico para desbloquear niveles avanzados"
+                                : ""
+                            }
+                          >
+                            <div className="info-item-top">
+                              <div className="info-item-name">
+                                Nivel {n.id}: {n.titulo}
+                              </div>
+
+                              <div className="info-item-meta">
+                                <span className="info-mini-progreso">{progreso}%</span>
+                                <span className={`badge-estado ${progreso === 100 ? "ok" : ""}`}>
+                                  {progreso === 100 ? "Completo" : "En progreso"}
+                                </span>
+                              </div>
                             </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </aside>
 
-                            <div className="info-item-meta">
-                              <span className="info-mini-progreso">{progreso}%</span>
-                              <span className={`badge-estado ${progreso === 100 ? "ok" : ""}`}>
-                                {progreso === 100 ? "Completo" : "En progreso"}
+                <aside className="info-panel">
+                  <div className="info-panel-header">
+                    <div>
+                      <div className="info-panel-title">Secciones</div>
+                      <div className="info-panel-sub">Se marca “Vista” al llegar al final</div>
+                    </div>
+                  </div>
+
+                  <div className="info-scroll">
+                    <div className="info-list">
+                      {SECCIONES.map((sec) => {
+                        const clave = `nivel${nivelLeccion}`
+                        const visto = !!seccionesVistas?.[clave]?.[sec.id]
+                        const activo = seccionLeccion === sec.id
+
+                        return (
+                          <button
+                            key={sec.id}
+                            className={`info-item ${activo ? "activo" : ""}`}
+                            onClick={() => {
+                              setSeccionLeccion(sec.id)
+                              guardarStorage({ seccionLeccion: sec.id })
+                              window.scrollTo({ top: 0, behavior: "smooth" })
+                            }}
+                          >
+                            <div className="info-item-top">
+                              <div className="info-item-name">{sec.titulo}</div>
+                              <span className={`badge-estado ${visto ? "ok" : ""}`}>
+                                {visto ? "Vista" : "Pendiente"}
                               </span>
                             </div>
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </aside>
-
-              {/* Panel 2: Secciones */}
-              <aside className="info-panel">
-                <div className="info-panel-header">
-                  <div>
-                    <div className="info-panel-title">Secciones</div>
-                    <div className="info-panel-sub">
-                      Se marca “Vista” al llegar al final
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
-                </div>
+                </aside>
 
-                <div className="info-scroll">
-                  <div className="info-list">
-                    {SECCIONES.map((sec) => {
-                      const clave = `nivel${nivelLeccion}`
-                      const visto = !!seccionesVistas?.[clave]?.[sec.id]
-                      const activo = seccionLeccion === sec.id
+                <section className="info-content">
+                  <div className="info-content-header">
+                    <div className="info-content-left">
+                      <h2>
+                        Nivel {nivelLeccion} · {tituloSeccionActual}
+                      </h2>
+                      <p>Lectura académica + práctica guiada (orientado a pentesting)</p>
+                    </div>
 
-                      return (
-                        <button
-                          key={sec.id}
-                          className={`info-item ${activo ? "activo" : ""}`}
-                          onClick={() => {
-                            setSeccionLeccion(sec.id)
-                            guardarStorage({ seccionLeccion: sec.id })
-                            window.scrollTo({ top: 0, behavior: "smooth" })
-                          }}
-                        >
-                          <div className="info-item-top">
-                            <div className="info-item-name">{sec.titulo}</div>
-                            <span className={`badge-estado ${visto ? "ok" : ""}`}>
-                              {visto ? "Vista" : "Pendiente"}
-                            </span>
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </aside>
-
-              {/* Panel 3: Contenido */}
-              <section className="info-content">
-                <div className="info-content-header">
-                  <div className="info-content-left">
-                    <h2>
-                      Nivel {nivelLeccion} · {tituloSeccionActual}
-                    </h2>
-                    <p>Lectura académica + práctica guiada (orientado a pentesting)</p>
-                  </div>
-
-                  <div className="info-content-right">
-                    <div className="info-progress">
-                      Progreso nivel {nivelLeccion}: <strong>{progresoNivelActual}%</strong>
+                    <div className="info-content-right">
+                      <div className="info-progress">
+                        Progreso nivel {nivelLeccion}: <strong>{progresoNivelActual}%</strong>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* key => fuerza animación al cambiar sección/nivel */}
-                <div className="info-content-body info-anim" key={`${nivelLeccion}-${seccionLeccion}`}>
-                  <div
-                    className="markdown-contenido"
-                    dangerouslySetInnerHTML={{ __html: marked.parse(textoActual) }}
-                  />
+                  <div className="info-content-body info-anim" key={`${nivelLeccion}-${seccionLeccion}`}>
+                    <div
+                      className="markdown-contenido"
+                      dangerouslySetInnerHTML={{ __html: marked.parse(textoActual) }}
+                    />
 
-                  <div ref={finContenidoRef} style={{ height: 1 }} />
+                    <div ref={finContenidoRef} style={{ height: 1 }} />
 
-                  <div style={{ marginTop: 14, color: "#52606d", fontSize: 13 }}>
-                    <strong>Nota:</strong> Esta sección se marca automáticamente como “Vista” cuando
-                    llegas al final del contenido.
+                    <div style={{ marginTop: 14, color: "#52606d", fontSize: 13 }}>
+                      <strong>Nota:</strong> Esta sección se marca automáticamente como “Vista” cuando
+                      llegas al final del contenido.
+                    </div>
                   </div>
-                </div>
-              </section>
-            </div>
-          </section>
-        </div>
-      </main>
+                </section>
+              </div>
+            </section>
+          </div>
+        </main>
       </TransicionPagina>
     </GuardSesion>
   )

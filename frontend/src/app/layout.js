@@ -1,20 +1,28 @@
-import { Geist, Geist_Mono } from "next/font/google"
+import { Manrope, Inter, JetBrains_Mono } from "next/font/google"
 import "./globals.css"
 import ProvedorTransiciones from "./componentes/ProvedorTransiciones"
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"]
+const manrope = Manrope({
+  variable: "--font-manrope",
+  subsets: ["latin"],
+  weight: ["400", "600", "700", "800"]
 })
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"]
+const inter = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"]
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains",
+  subsets: ["latin"],
+  weight: ["400", "700"]
 })
 
 export const metadata = {
   title: "CyberLab",
-  description: "Plataforma web de entrenamiento práctico en ciberseguridad"
+  description: "Plataforma de entrenamiento práctico en ciberseguridad y pentesting"
 }
 
 export default function RootLayout({ children }) {
@@ -22,7 +30,7 @@ export default function RootLayout({ children }) {
     <html
       lang="es"
       translate="no"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${manrope.variable} ${inter.variable} ${jetbrainsMono.variable} h-full`}
     >
       <head>
         <meta name="google" content="notranslate" />

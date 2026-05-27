@@ -173,3 +173,8 @@ class RespuestaUsuario(BaseModel):
 
     class Config:
         from_attributes = True
+
+class SolicitudTerminalDefensa(BaseModel):
+    nombre_usuario: str
+    comando: str
+    ip_escenario: str | None = None        

@@ -11,7 +11,12 @@ import TransicionPagina from "../../componentes/TransicionPagina"
 // ================================================================
 const LIMITE_SEG  = 360   // 6 minutos por ejercicio
 const TOTAL_EJ    = 5
-const API         = "http://127.0.0.1:8000"
+const API = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
+
+const getAuthHeaders = () => ({
+  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Content-Type": "application/json"
+})
 
 // ================================================================
 // POOL DE COMANDOS DEFENSIVOS
@@ -483,7 +488,9 @@ export default function DefensaDashboard() {
   // ── Estadísticas ───────────────────────────────────────────────
   const cargarStats = async () => {
     try {
-      const d = await (await fetch(`${API}/estadisticas`)).json()
+      const d = await (await fetch(`${API}/estadisticas`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })).json()
       setStats({
         total_eventos: d?.total_eventos ?? 0,
         total_alertas: d?.total_alertas ?? 0,
@@ -545,7 +552,7 @@ export default function DefensaDashboard() {
       : `${API}/simular/escaneo-puertos`
     try {
       const r = await fetch(url, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario: nombreUsuario })
       })
       const d = await r.json()
@@ -579,7 +586,7 @@ export default function DefensaDashboard() {
     const ejId   = escenario.ejercicio_id || 1
     try {
       const r = await fetch(`${API}/intentos/crear`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
           nombre_usuario: nombreUsuario, ejercicio_id: ejId,
           tiempo_seg: tUsado, errores: 0, porcentaje: 100, estado: "aprobado"
@@ -605,7 +612,7 @@ export default function DefensaDashboard() {
     setCargandoAyuda(true)
     try {
       const r = await fetch(`${API}/escenario/pedir-ayuda`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario: nombreUsuario })
       })
       const d = await r.json()
@@ -673,7 +680,7 @@ export default function DefensaDashboard() {
 
     try {
       const r = await fetch(`${API}/defensa/terminal`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
           nombre_usuario: nombreUsuario,
           comando: cmd,
@@ -708,7 +715,9 @@ export default function DefensaDashboard() {
       modoDefensa: true,
     }
     try {
-      const r = await fetch(`${API}/reporte?nombre_usuario=${nombreUsuario}`)
+      const r = await fetch(`${API}/reporte?nombre_usuario=${nombreUsuario}`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })
       if (r.ok) {
         const d = await r.json()
         rep.totalEventos  = d.total_eventos ?? rep.totalEventos

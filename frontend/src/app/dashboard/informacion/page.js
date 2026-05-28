@@ -9,6 +9,13 @@ import TransicionPagina from "../../componentes/TransicionPagina"
 
 marked.setOptions({ mangle: false, headerIds: false })
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
+
+const getAuthHeaders = () => ({
+  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Content-Type": "application/json"
+})
+
 // ================================================================
 // DEFINICIÓN DE NIVELES — ATAQUE Y DEFENSA
 // ================================================================
@@ -130,7 +137,9 @@ export default function InformacionDashboard() {
   // ── Backend: cargar progreso de lectura de ataque ──────────────
   const cargarProgresoAtaqueDesdeBackend = async (usuario) => {
     try {
-      const r = await fetch(`http://127.0.0.1:8000/progreso/${encodeURIComponent(usuario)}`)
+      const r = await fetch(`${API_URL}/progreso/${encodeURIComponent(usuario)}`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })
       if (!r.ok) return
       const d = await r.json()
       const registros = Array.isArray(d.progreso) ? d.progreso : []
@@ -173,9 +182,9 @@ export default function InformacionDashboard() {
     if (secIdx < 0) return
     const leccionId = (nivel - 1) * SECCIONES.length + (secIdx + 1)
     try {
-      await fetch("http://127.0.0.1:8000/progreso/actualizar", {
+      await fetch(`${API_URL}/progreso/actualizar`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario: nombreUsuario, leccion_id: leccionId, porcentaje: 100 })
       })
     } catch (e) { console.warn("No se pudo guardar progreso en backend:", e) }
@@ -184,7 +193,9 @@ export default function InformacionDashboard() {
   // ── Backend: niveles desbloqueados ataque ──────────────────────
   const cargarNivelesDesbloqueadosAtaque = async (usuario) => {
     try {
-      const r = await fetch(`http://127.0.0.1:8000/progreso/laboratorio/${encodeURIComponent(usuario)}`)
+      const r = await fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })
       if (!r.ok) return
       const d = await r.json()
       const completados = Array.isArray(d.niveles_completados) ? d.niveles_completados : []

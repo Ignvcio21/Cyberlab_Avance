@@ -4,6 +4,13 @@ import { useEffect, useMemo, useState, useRef } from "react"
 import { useRouter } from "next/navigation"
 import BarraSuperior from "../componentes/BarraSuperior"
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
+
+const getAuthHeaders = () => ({
+  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Content-Type": "application/json"
+})
+
 const LIMITE_SEG = 300
 const TOTAL_EJ   = 5
 
@@ -386,7 +393,9 @@ function MisEvaluaciones({ nombreUsuario }) {
   useEffect(() => {
     if (!nombreUsuario) return
     setCargando(true)
-    fetch(`http://127.0.0.1:8000/mis-evaluaciones?nombre_usuario=${encodeURIComponent(nombreUsuario)}`)
+    fetch(`${API_URL}/mis-evaluaciones?nombre_usuario=${encodeURIComponent(nombreUsuario)}`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+    })
       .then(r => r.json())
       .then(d => setData(Array.isArray(d) ? d : (d?.intentos || [])))
       .catch(() => {})
@@ -566,7 +575,9 @@ export default function Dashboard() {
 
   const cargarStats = async () => {
     try {
-      const d = await (await fetch("http://127.0.0.1:8000/estadisticas")).json()
+      const d = await (await fetch(`${API_URL}/estadisticas`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })).json()
       setStats({
         total_eventos:     d?.total_eventos     ?? 0,
         total_alertas:     d?.total_alertas     ?? 0,
@@ -579,13 +590,17 @@ export default function Dashboard() {
   // Carga progreso real desde backend
   const cargarProgresoDesdeBackend = async (usuario) => {
     try {
-      const r2 = await fetch(`http://127.0.0.1:8000/docente/intentos?nombre_usuario_docente=${encodeURIComponent(usuario)}`)
+      const r2 = await fetch(`${API_URL}/docente/intentos?nombre_usuario_docente=${encodeURIComponent(usuario)}`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })
       if (!r2.ok) return
       const d2   = await r2.json()
       const todos = Array.isArray(d2) ? d2 : (d2?.intentos || [])
       const aprobados = todos.filter(it => it.estado === "aprobado" && it.usuario === usuario)
 
-      const r3 = await fetch("http://127.0.0.1:8000/contenido/estructura")
+      const r3 = await fetch(`${API_URL}/contenido/estructura`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })
       if (!r3.ok) return
       const d3   = await r3.json()
       const mapEjNivel = {}  // ejercicio_id -> nivel (1-7)
@@ -683,11 +698,11 @@ export default function Dashboard() {
     if (!inicioSes) { setInicioSes(Date.now()); setReporte(null) }
     const defNivel = NIVELES_EJERCICIOS[nivelActivo]
     const url = defNivel?.tipo_simulacion === "fuerza_bruta"
-      ? "http://127.0.0.1:8000/simular/fuerza-bruta"
-      : "http://127.0.0.1:8000/simular/escaneo-puertos"
+      ? `${API_URL}/simular/fuerza-bruta`
+      : `${API_URL}/simular/escaneo-puertos`
     try {
       const r = await fetch(url, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario: nombreUsuario })
       })
       const d = await r.json()
@@ -706,8 +721,8 @@ export default function Dashboard() {
     if (!escenario) { setMensaje("No hay escenario activo."); return }
     setCargandoAyuda(true)
     try {
-      const r = await fetch("http://127.0.0.1:8000/escenario/pedir-ayuda", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch(`${API_URL}/escenario/pedir-ayuda`, {
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario: nombreUsuario })
       })
       const d = await r.json()
@@ -732,8 +747,8 @@ export default function Dashboard() {
     const tUsado = Math.max(0, LIMITE_SEG - tiempoRest)
     const ejId   = escenario.ejercicio_id || 1
     try {
-      const r = await fetch("http://127.0.0.1:8000/intentos/crear", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch(`${API_URL}/intentos/crear`, {
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
           nombre_usuario: nombreUsuario, ejercicio_id: ejId,
           tiempo_seg: tUsado, errores: 0, porcentaje: 100, estado: "aprobado"
@@ -826,8 +841,8 @@ export default function Dashboard() {
     setComando("")
     const prompt = `cyberlab@kali:~$ ${cmd}`
     try {
-      const r = await fetch("http://127.0.0.1:8000/terminal", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch(`${API_URL}/terminal`, {
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario: nombreUsuario, comando: cmd })
       })
       const d   = await r.json()
@@ -860,7 +875,9 @@ export default function Dashboard() {
       logros: ["Ejercicio completado", "Análisis del incidente realizado", "Contención aplicada"],
     }
     try {
-      const r = await fetch(`http://127.0.0.1:8000/reporte?nombre_usuario=${nombreUsuario}`)
+      const r = await fetch(`${API_URL}/reporte?nombre_usuario=${nombreUsuario}`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })
       if (r.ok) {
         const d = await r.json()
         rep.totalEventos  = d.total_eventos ?? rep.totalEventos

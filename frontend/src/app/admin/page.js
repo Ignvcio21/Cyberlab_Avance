@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation"
 import GuardSesion from "../componentes/GuardSesion"
 import SidebarNav from "../componentes/SidebarNav"
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
+
+const getAuthHeaders = () => ({
+  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Content-Type": "application/json"
+})
+
 const SECCIONES = [
   { id:"introduccion",   titulo:"Introducción" },
   { id:"objetivos",      titulo:"Objetivos del nivel" },
@@ -25,18 +32,16 @@ export default function AdminContenido() {
   const [nombreUsuario, setNombreUsuario] = useState("")
   const [rolUsuario,    setRolUsuario]    = useState("")
 
-  const [tab, setTab]     = useState("contenido") // "contenido" | "ejercicios"
+  const [tab, setTab]     = useState("contenido")
   const [mensaje, setMensaje] = useState("")
-  const [tipo_msg, setTipoMsg] = useState("ok") // "ok" | "error"
+  const [tipo_msg, setTipoMsg] = useState("ok")
   const [cargando, setCargando] = useState(false)
 
-  // ── Contenido ────────────────────────────────────────────────────────────────
   const [nivelSel,   setNivelSel]   = useState(1)
   const [seccionSel, setSeccionSel] = useState("introduccion")
   const [contenido,  setContenido]  = useState("")
   const [editando,   setEditando]   = useState(false)
 
-  // ── Ejercicios ───────────────────────────────────────────────────────────────
   const [estructura,   setEstructura]   = useState([])
   const [formEj, setFormEj] = useState({ descripcion:"", tipo:"ataque", comandos_objetivo:10, tiempo_limite_seg:300, leccion_id:"" })
 
@@ -67,11 +72,10 @@ export default function AdminContenido() {
   }
 
   const guardarContenido = async () => {
-    // Guardar via API del backend si existe, si no, mostrar instrucción
     setCargando(true)
     try {
-      const r = await fetch("http://127.0.0.1:8000/admin/contenido/guardar", {
-        method:"POST", headers:{"Content-Type":"application/json"},
+      const r = await fetch(`${API_URL}/admin/contenido/guardar`, {
+        method:"POST", headers:getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario:nombreUsuario, nivel:nivelSel,
                                seccion:seccionSel, contenido })
       })
@@ -79,7 +83,6 @@ export default function AdminContenido() {
         mostrarMsg("Contenido guardado correctamente.")
         setEditando(false)
       } else {
-        // Fallback: copiar instrucción
         mostrarMsg(`Guarda manualmente en: frontend/public/contenidos/informacion/nivel${nivelSel}/${seccionSel}.md`, "error")
       }
     } catch {
@@ -89,7 +92,9 @@ export default function AdminContenido() {
 
   const cargarEstructura = async () => {
     try {
-      const r = await fetch("http://127.0.0.1:8000/contenido/estructura")
+      const r = await fetch(`${API_URL}/contenido/estructura`, {
+        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      })
       if (r.ok) { const d = await r.json(); setEstructura(d?.cursos||[]) }
     } catch {}
   }
@@ -99,8 +104,8 @@ export default function AdminContenido() {
     if (!formEj.leccion_id) { mostrarMsg("Selecciona una lección","error"); return }
     setCargando(true)
     try {
-      const r = await fetch("http://127.0.0.1:8000/admin/ejercicio", {
-        method:"POST", headers:{"Content-Type":"application/json"},
+      const r = await fetch(`${API_URL}/admin/ejercicio`, {
+        method:"POST", headers:getAuthHeaders(),
         body: JSON.stringify({ nombre_usuario:nombreUsuario, ...formEj,
                                leccion_id:Number(formEj.leccion_id),
                                comandos_objetivo:Number(formEj.comandos_objetivo),
@@ -113,7 +118,6 @@ export default function AdminContenido() {
     finally { setCargando(false) }
   }
 
-  // ── Lecciones planas para el select ──────────────────────────────────────────
   const leccionesPlanas = []
   estructura.forEach(curso => {
     curso.capitulos?.forEach(cap => {
@@ -148,10 +152,8 @@ export default function AdminContenido() {
             </div>
           )}
 
-          {/* ── TAB CONTENIDO ── */}
           {tab==="contenido" && (
             <div className="admin-layout">
-              {/* Selector nivel + sección */}
               <div className="admin-sidebar">
                 <div className="lab-card">
                   <div className="lab-card-header"><span className="lab-card-title">Nivel</span></div>
@@ -179,7 +181,6 @@ export default function AdminContenido() {
                 </div>
               </div>
 
-              {/* Editor */}
               <div className="admin-editor">
                 <div className="lab-card" style={{flex:1}}>
                   <div className="lab-card-header">
@@ -228,10 +229,8 @@ export default function AdminContenido() {
             </div>
           )}
 
-          {/* ── TAB EJERCICIOS ── */}
           {tab==="ejercicios" && (
             <div className="panel-dos-col">
-              {/* Crear ejercicio */}
               <div className="lab-card">
                 <div className="lab-card-header"><span className="lab-card-title">Crear ejercicio</span></div>
                 <form onSubmit={crearEjercicio} style={{display:"grid",gap:10}}>
@@ -276,7 +275,6 @@ export default function AdminContenido() {
                 </form>
               </div>
 
-              {/* Estructura actual */}
               <div className="lab-card">
                 <div className="lab-card-header">
                   <span className="lab-card-title">Estructura actual</span>

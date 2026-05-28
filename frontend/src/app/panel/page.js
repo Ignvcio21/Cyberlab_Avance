@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation"
 import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
+
+const getAuthHeaders = () => ({
+  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Content-Type": "application/json"
+})
+
 function extraerError(data) {
   if (!data) return "Error inesperado"
   const d = data.detail ?? data
@@ -276,7 +283,8 @@ export default function PanelDocente() {
     setCargando(true); setMensaje("")
     try {
       const r = await fetch(
-        `http://127.0.0.1:8000/docente/intentos?nombre_usuario_docente=${encodeURIComponent(nombreUsuario)}`
+        `${API_URL}/docente/intentos?nombre_usuario_docente=${encodeURIComponent(nombreUsuario)}`,
+        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
@@ -290,7 +298,8 @@ export default function PanelDocente() {
     setCargando(true); setMensaje("")
     try {
       const r = await fetch(
-        `http://127.0.0.1:8000/admin/usuarios?nombre_usuario=${encodeURIComponent(nombreUsuario)}`
+        `${API_URL}/admin/usuarios?nombre_usuario=${encodeURIComponent(nombreUsuario)}`,
+        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
@@ -328,7 +337,8 @@ export default function PanelDocente() {
     setMensaje(""); setCargando(true)
     try {
       const r = await fetch(
-        `http://127.0.0.1:8000/docente/intentos/${it.intento_id}?nombre_usuario_docente=${encodeURIComponent(nombreUsuario)}`
+        `${API_URL}/docente/intentos/${it.intento_id}?nombre_usuario_docente=${encodeURIComponent(nombreUsuario)}`,
+        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
@@ -351,8 +361,8 @@ export default function PanelDocente() {
     }
     setMensaje(""); setCargando(true)
     try {
-      const r = await fetch("http://127.0.0.1:8000/docente/evaluar", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch(`${API_URL}/docente/evaluar`, {
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
           nombre_usuario_docente: nombreUsuario,
           intento_id: intentoSel.id,
@@ -374,8 +384,8 @@ export default function PanelDocente() {
     if (!nuevoU.trim() || !nuevaC.trim()) { setMensaje("Completa usuario y contraseña"); return }
     setMensaje(""); setCargando(true)
     try {
-      const r = await fetch("http://127.0.0.1:8000/admin/crear-usuario", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await fetch(`${API_URL}/admin/crear-usuario`, {
+        method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
           nombre_usuario_admin: nombreUsuario,
           nombre_usuario: nuevoU.trim(),

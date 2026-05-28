@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
+
 const NOMBRES_NIVELES = {
   1: "Fuerza Bruta — Fundamentos",
   2: "Escaneo de Puertos",
@@ -48,7 +50,9 @@ export default function PaginaNotas() {
   useEffect(() => {
     if (!nombreUsuario) return
     setCargando(true)
-    fetch(`http://127.0.0.1:8000/mis-evaluaciones?nombre_usuario=${encodeURIComponent(nombreUsuario)}`)
+    fetch(`${API_URL}/mis-evaluaciones?nombre_usuario=${encodeURIComponent(nombreUsuario)}`, {
+      headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+    })
       .then(r => r.json())
       .then(d => setIntentos(Array.isArray(d) ? d : (d?.intentos || [])))
       .catch(() => {})

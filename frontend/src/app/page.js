@@ -44,6 +44,7 @@ export default function InicioSesion() {
 
       localStorage.setItem("nombre_usuario", datos.nombre_usuario)
       if (datos.rol) localStorage.setItem("rol_usuario", datos.rol)
+      if (datos.token) localStorage.setItem("token", datos.token)
 
       router.push("/inicio")
     } catch {

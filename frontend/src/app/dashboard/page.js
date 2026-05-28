@@ -970,6 +970,7 @@ export default function Dashboard() {
           </div>
           <button onClick={() => {
             localStorage.removeItem("nombre_usuario"); localStorage.removeItem("rol_usuario")
+            localStorage.removeItem("token")
             if (claveLS) localStorage.removeItem(claveLS); router.push("/")
           }} className="logout-button">Cerrar sesión</button>
         </header>

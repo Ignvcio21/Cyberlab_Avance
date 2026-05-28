@@ -20,6 +20,7 @@ export default function BarraSuperior({ paginaActiva }) {
   const salir = () => {
     localStorage.removeItem("nombre_usuario")
     localStorage.removeItem("rol_usuario")
+    localStorage.removeItem("token")
     router.push("/")
   }
 

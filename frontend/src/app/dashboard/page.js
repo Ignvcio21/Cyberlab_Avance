@@ -560,14 +560,44 @@ export default function Dashboard() {
     localStorage.setItem(claveLS, JSON.stringify({ ...(leerLS() || {}), ...data }))
   }
 
+  const cargarProgresoLecturaDesdeBackend = async (usuario) => {
+    try {
+      const token = localStorage.getItem("token")
+      const r = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/progreso/${encodeURIComponent(usuario)}`,
+        { headers: { "Authorization": `Bearer ${token}` } }
+      )
+      if (!r.ok) return
+      const d = await r.json()
+      const registros = Array.isArray(d.progreso) ? d.progreso : []
+
+      const nuevoMapa = {}
+      for (let n = 1; n <= 7; n++) {
+        nuevoMapa[`ataque_nivel${n}`] = {}
+        for (const s of SECCIONES_INFO) nuevoMapa[`ataque_nivel${n}`][s] = false
+      }
+      registros.forEach(reg => {
+        if (reg.porcentaje >= 100 || reg.completado) {
+          const idx    = reg.leccion_id - 1
+          const niv    = Math.floor(idx / SECCIONES_INFO.length) + 1
+          const secIdx = idx % SECCIONES_INFO.length
+          const sec    = SECCIONES_INFO[secIdx]
+          if (niv >= 1 && niv <= 7 && sec) nuevoMapa[`ataque_nivel${niv}`][sec] = true
+        }
+      })
+      guardarLS({ seccionesVistas: nuevoMapa })
+    } catch (e) {
+      console.warn("No se pudo cargar progreso de lectura:", e)
+    }
+  }
+
   const progresoLectura = nid => {
     const raw  = leerLS()
-    const mapa = raw?.seccionesVistas?.[`nivel${nid}`]
+    const mapa = raw?.seccionesVistas?.[`ataque_nivel${nid}`]
     if (!mapa) return 0
     const v = SECCIONES_INFO.filter(s => mapa[s]).length
     return Math.round(v / SECCIONES_INFO.length * 100)
   }
-
   const normalizar = t => typeof t === "string"
     ? t.replaceAll("ver alertas","show alerts").replaceAll("ver eventos","show events")
        .replaceAll("ver bloqueadas","show blocked").replaceAll("bloquear ip ","block ip ")
@@ -917,6 +947,7 @@ export default function Dashboard() {
       if (g.ejercicios) setEjercicios(prev => ({ ...prev, ...g.ejercicios }))
     }
     cargarProgresoDesdeBackend(nombreUsuario)
+    cargarProgresoLecturaDesdeBackend(nombreUsuario)
     const iv = setInterval(cargarStats, 3000)
     return () => clearInterval(iv)
   }, [nombreUsuario])

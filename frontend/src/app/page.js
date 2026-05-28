@@ -3,6 +3,9 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL
+
+
 export default function InicioSesion() {
   const router = useRouter()
 
@@ -22,7 +25,7 @@ export default function InicioSesion() {
     setCargando(true)
 
     try {
-      const respuesta = await fetch("http://127.0.0.1:8000/iniciar-sesion", {
+      const respuesta = await fetch(`${API_URL}/iniciar-sesion`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -73,7 +76,7 @@ export default function InicioSesion() {
     setCargando(true)
 
     try {
-      const respuesta = await fetch("http://127.0.0.1:8000/registrar", {
+      const respuesta = await fetch(`${API_URL}/registrar`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

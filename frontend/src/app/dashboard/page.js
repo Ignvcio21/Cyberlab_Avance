@@ -564,7 +564,7 @@ export default function Dashboard() {
     try {
       const token = localStorage.getItem("token")
       const r = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/progreso/${encodeURIComponent(usuario)}`,
+        `${API_URL}/progreso/${encodeURIComponent(usuario)}`,
         { headers: { "Authorization": `Bearer ${token}` } }
       )
       if (!r.ok) return

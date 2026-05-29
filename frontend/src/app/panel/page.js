@@ -263,6 +263,9 @@ export default function PanelDocente() {
   const [nuevaC, setNuevaC] = useState("")
   const [nuevoR, setNuevoR] = useState("estudiante")
 
+  const [editandoRolId,  setEditandoRolId]  = useState(null)
+  const [rolEditValor,   setRolEditValor]   = useState("")
+
   const esAdmin = rolUsuario === "admin"
 
   useEffect(() => {
@@ -333,23 +336,12 @@ export default function PanelDocente() {
     })
   }, [perfilActivo, intentos, ordenDesc])
 
-  const abrirEval = async (it) => {
-    setMensaje(""); setCargando(true)
-    try {
-      const r = await fetch(
-        `${API_URL}/docente/intentos/${it.intento_id}?nombre_usuario_docente=${encodeURIComponent(nombreUsuario)}`,
-        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
-      )
-      const d = await r.json()
-      if (!r.ok) { setMensaje(extraerError(d)); return }
-      const det = d?.intento || d
-      setIntentoSel(det)
-      // Sin valor por defecto — solo cargar si ya tiene evaluación
-      setNota(det?.evaluacion?.nota != null ? String(det.evaluacion.nota) : "")
-      setComentarios(det?.evaluacion?.comentarios || "")
-      setModalEval(true)
-    } catch { setMensaje("No se pudo cargar el intento") }
-    finally { setCargando(false) }
+  const abrirEval = (it) => {
+    setMensaje("")
+    setIntentoSel(it)
+    setNota(it?.nota != null ? String(it.nota) : "")
+    setComentarios(it?.comentarios || "")
+    setModalEval(true)
   }
 
   const enviarEval = async (e) => {
@@ -365,7 +357,7 @@ export default function PanelDocente() {
         method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
           nombre_usuario_docente: nombreUsuario,
-          intento_id: intentoSel.id,
+          intento_id: intentoSel.intento_id,
           nota: notaNum,
           comentarios: comentarios || null
         })
@@ -375,6 +367,23 @@ export default function PanelDocente() {
       setMensaje(d?.mensaje || "Evaluación guardada")
       setModalEval(false); setIntentoSel(null)
       await cargarIntentos()
+    } catch { setMensaje("No se pudo conectar con el backend") }
+    finally { setCargando(false) }
+  }
+
+  const cambiarRol = async (nombreU, nuevoRol) => {
+    if (!nombreU || !nuevoRol) return
+    setMensaje(""); setCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/admin/cambiar-rol`, {
+        method: "POST", headers: getAuthHeaders(),
+        body: JSON.stringify({ nombre_usuario: nombreU, nuevo_rol: nuevoRol })
+      })
+      const d = await r.json()
+      if (!r.ok) { setMensaje(extraerError(d)); return }
+      setMensaje(d?.mensaje || "Rol actualizado")
+      setEditandoRolId(null)
+      await cargarUsuarios()
     } catch { setMensaje("No se pudo conectar con el backend") }
     finally { setCargando(false) }
   }
@@ -517,15 +526,59 @@ export default function PanelDocente() {
                   <span className="panel-section-count">{usuarios.length}</span>
                 </div>
                 <table className="panel-tabla">
-                  <thead><tr><th>ID</th><th>Usuario</th><th>Rol</th></tr></thead>
+                  <thead><tr><th>ID</th><th>Usuario</th><th>Rol</th><th></th></tr></thead>
                   <tbody>
                     {usuarios.map(u => (
                       <tr key={u.id}>
-                        <td>{u.id}</td><td><strong>{u.nombre_usuario}</strong></td><td>{u.rol}</td>
+                        <td>{u.id}</td>
+                        <td><strong>{u.nombre_usuario}</strong></td>
+                        <td>
+                          {editandoRolId === u.id ? (
+                            <select
+                              className="campo-inicio"
+                              style={{ padding:"2px 6px", fontSize:12, height:"auto" }}
+                              value={rolEditValor}
+                              onChange={e => setRolEditValor(e.target.value)}
+                            >
+                              <option value="estudiante">estudiante</option>
+                              <option value="docente">docente</option>
+                              <option value="admin">admin</option>
+                            </select>
+                          ) : (
+                            <span style={{
+                              color: u.rol === "admin" ? "var(--primario-dim)"
+                                   : u.rol === "docente" ? "var(--terciario-dim)"
+                                   : "var(--texto-secundario)"
+                            }}>{u.rol}</span>
+                          )}
+                        </td>
+                        <td style={{ whiteSpace:"nowrap" }}>
+                          {editandoRolId === u.id ? (
+                            <>
+                              <button
+                                className="btn-evaluar"
+                                style={{ padding:"3px 10px", fontSize:11, marginRight:4 }}
+                                onClick={() => cambiarRol(u.nombre_usuario, rolEditValor)}
+                                disabled={cargando}
+                              >Guardar</button>
+                              <button
+                                className="boton-secundario"
+                                style={{ padding:"3px 10px", fontSize:11 }}
+                                onClick={() => setEditandoRolId(null)}
+                              >✕</button>
+                            </>
+                          ) : (
+                            <button
+                              className="boton-secundario"
+                              style={{ padding:"3px 10px", fontSize:11 }}
+                              onClick={() => { setEditandoRolId(u.id); setRolEditValor(u.rol) }}
+                            >Cambiar rol</button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                     {usuarios.length === 0 && (
-                      <tr><td colSpan={3} style={{ opacity:0.6 }}>Sin usuarios</td></tr>
+                      <tr><td colSpan={4} style={{ opacity:0.6 }}>Sin usuarios</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -566,15 +619,15 @@ export default function PanelDocente() {
                 </div>
               </div>
 
-              {intentoSel.evaluacion && (
+              {intentoSel.tiene_evaluacion && (
                 <div style={{
                   background:"rgba(0,218,243,0.06)", border:"1px solid rgba(0,218,243,0.18)",
                   borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize:12,
                   color:"var(--texto-secundario)"
                 }}>
                   <strong style={{ color:"var(--terciario-dim)" }}>Evaluación existente:</strong>
-                  {" "}Nota {intentoSel.evaluacion.nota}
-                  {intentoSel.evaluacion.comentarios && ` — "${intentoSel.evaluacion.comentarios}"`}
+                  {" "}Nota {intentoSel.nota}
+                  {intentoSel.comentarios && ` — "${intentoSel.comentarios}"`}
                 </div>
               )}
 
@@ -616,7 +669,7 @@ export default function PanelDocente() {
                   <div style={{ fontSize:13, color:"#ffb4ab", fontFamily:"var(--mono)" }}>{mensaje}</div>
                 )}
                 <button className="boton-principal" type="submit" disabled={cargando || !nota.trim()}>
-                  {cargando ? "Guardando..." : intentoSel.evaluacion ? "Actualizar evaluación" : "Guardar evaluación"}
+                  {cargando ? "Guardando..." : intentoSel.tiene_evaluacion ? "Actualizar evaluación" : "Guardar evaluación"}
                 </button>
               </form>
             </div>

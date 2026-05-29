@@ -593,7 +593,7 @@ export default function Dashboard() {
 
   const progresoLectura = nid => {
     const raw  = leerLS()
-    const mapa = raw?.seccionesVistas?.[`ataque_nivel${nid}`]
+    const mapa = raw?.seccionesVistas?.[`ataque_nivel${nid}`] || raw?.seccionesVistas?.[`nivel${nid}`]
     if (!mapa) return 0
     const v = SECCIONES_INFO.filter(s => mapa[s]).length
     return Math.round(v / SECCIONES_INFO.length * 100)

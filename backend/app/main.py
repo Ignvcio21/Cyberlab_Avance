@@ -37,6 +37,7 @@ from .schemas import (
     EstructuraSalida, RespuestaUsuario,
     SolicitudTerminal, RespuestaTerminal,
     SolicitudTerminalDefensa,
+    SolicitudCambiarRol,
 )
 from .auth import (
     hashear_contrasena, verificar_contrasena,
@@ -429,6 +430,19 @@ def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_admin), bd: Ses
     return bd.query(Usuario).order_by(Usuario.id.asc()).all()
 
 
+@app.post("/admin/cambiar-rol")
+def admin_cambiar_rol(datos: SolicitudCambiarRol, usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd)):
+    rol = (datos.nuevo_rol or "").strip().lower()
+    if rol not in ["estudiante", "docente", "admin"]:
+        raise HTTPException(status_code=400, detail="Rol inválido — usa: estudiante, docente o admin")
+    u = bd.query(Usuario).filter(Usuario.nombre_usuario == datos.nombre_usuario).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    u.rol = rol
+    bd.commit()
+    return {"mensaje": f"Rol de '{datos.nombre_usuario}' cambiado a '{rol}'"}
+
+
 @app.post("/admin/curso")
 def admin_crear_curso(datos: SolicitudCrearCurso, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
     curso = Curso(titulo=datos.titulo, descripcion=datos.descripcion, nivel=datos.nivel, activo=True, creado_por_usuario_id=usuario_actual.id)
@@ -574,6 +588,7 @@ def docente_listar_intentos(usuario_actual: Usuario = Depends(solo_docente), bd:
             "errores": it.errores, "ayudas_pedidas": ayudas,
             "tiene_evaluacion": it.evaluacion is not None,
             "nota": it.evaluacion.nota if it.evaluacion else None,
+            "comentarios": it.evaluacion.comentarios if it.evaluacion else None,
             "descripcion_ejercicio": ej.descripcion if ej else None,
             "fecha_inicio": it.fecha_inicio.isoformat() if it.fecha_inicio else None,
             "fecha_fin": it.fecha_fin.isoformat() if it.fecha_fin else None,

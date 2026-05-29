@@ -177,4 +177,9 @@ class RespuestaUsuario(BaseModel):
 class SolicitudTerminalDefensa(BaseModel):
     nombre_usuario: str
     comando: str
-    ip_escenario: str | None = None        
+    ip_escenario: str | None = None
+
+
+class SolicitudCambiarRol(BaseModel):
+    nombre_usuario: str
+    nuevo_rol: str

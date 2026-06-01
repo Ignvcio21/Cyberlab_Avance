@@ -361,45 +361,40 @@ def seed_plantillas(bd: Session):
 
 @app.on_event("startup")
 def iniciar_sistema():
-    # Migración: añadir columnas nuevas si no existen (compatible PostgreSQL y SQLite)
-    # Cada operación usa su propia conexión para evitar transacciones abortadas en PostgreSQL
+    # Migración DDL con AUTOCOMMIT para evitar transacciones abortadas en PostgreSQL
     dialect = engine.dialect.name
+    ac_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
 
-    def _columnas_existentes():
-        with engine.connect() as con:
-            if dialect == "sqlite":
-                return [row[1] for row in con.execute(text("PRAGMA table_info(usuarios)"))]
-            else:
-                result = con.execute(text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = 'usuarios'"
-                ))
-                return [row[0] for row in result]
+    with ac_engine.connect() as con:
+        # Leer columnas existentes
+        if dialect == "sqlite":
+            columnas = [row[1] for row in con.execute(text("PRAGMA table_info(usuarios)"))]
+        else:
+            columnas = [row[0] for row in con.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='usuarios'"
+            ))]
 
-    columnas = _columnas_existentes()
-    for col, tipo in [
-        ("nombre",             "TEXT"),
-        ("correo",             "TEXT"),
-        ("token_reset",        "TEXT"),
-        ("token_reset_expira", "TIMESTAMP"),
-    ]:
-        if col not in columnas:
-            try:
-                with engine.connect() as con:
+        # Agregar columnas faltantes (cada una independiente, AUTOCOMMIT = sin tx que abortar)
+        for col, tipo in [
+            ("nombre",             "TEXT"),
+            ("correo",             "TEXT"),
+            ("token_reset",        "TEXT"),
+            ("token_reset_expira", "TIMESTAMP"),
+        ]:
+            if col not in columnas:
+                try:
                     con.execute(text(f"ALTER TABLE usuarios ADD COLUMN {col} {tipo}"))
-                    con.commit()
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
-    try:
-        with engine.connect() as con:
+        # Crear índice único si no existe
+        try:
             if dialect == "sqlite":
                 con.execute(text("CREATE UNIQUE INDEX ix_usuarios_correo ON usuarios(correo) WHERE correo IS NOT NULL"))
             else:
                 con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_usuarios_correo ON usuarios(correo) WHERE correo IS NOT NULL"))
-            con.commit()
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     bd = SesionLocal()
     admin = bd.query(Usuario).filter(Usuario.nombre_usuario == "admin").first()

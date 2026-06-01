@@ -361,26 +361,36 @@ def seed_plantillas(bd: Session):
 
 @app.on_event("startup")
 def iniciar_sistema():
-    # Migración SQLite: añadir columnas nuevas si no existen
+    # Migración: añadir columnas nuevas si no existen (compatible PostgreSQL y SQLite)
     with engine.connect() as con:
-        columnas = [row[1] for row in con.execute(text("PRAGMA table_info(usuarios)"))]
-        if "nombre" not in columnas:
-            con.execute(text("ALTER TABLE usuarios ADD COLUMN nombre TEXT"))
-            con.commit()
-        if "correo" not in columnas:
-            con.execute(text("ALTER TABLE usuarios ADD COLUMN correo TEXT"))
-            con.commit()
+        dialect = engine.dialect.name  # "postgresql" o "sqlite"
+        if dialect == "sqlite":
+            columnas = [row[1] for row in con.execute(text("PRAGMA table_info(usuarios)"))]
+        else:
+            result = con.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'usuarios'"
+            ))
+            columnas = [row[0] for row in result]
+
+        for col, tipo in [
+            ("nombre",             "TEXT"),
+            ("correo",             "TEXT"),
+            ("token_reset",        "TEXT"),
+            ("token_reset_expira", "TIMESTAMP"),
+        ]:
+            if col not in columnas:
+                con.execute(text(f"ALTER TABLE usuarios ADD COLUMN {col} {tipo}"))
+                con.commit()
+
         try:
-            con.execute(text("CREATE UNIQUE INDEX ix_usuarios_correo ON usuarios(correo) WHERE correo IS NOT NULL"))
+            if dialect == "sqlite":
+                con.execute(text("CREATE UNIQUE INDEX ix_usuarios_correo ON usuarios(correo) WHERE correo IS NOT NULL"))
+            else:
+                con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_usuarios_correo ON usuarios(correo) WHERE correo IS NOT NULL"))
             con.commit()
         except Exception:
             pass
-        if "token_reset" not in columnas:
-            con.execute(text("ALTER TABLE usuarios ADD COLUMN token_reset TEXT"))
-            con.commit()
-        if "token_reset_expira" not in columnas:
-            con.execute(text("ALTER TABLE usuarios ADD COLUMN token_reset_expira TIMESTAMP"))
-            con.commit()
 
     bd = SesionLocal()
     admin = bd.query(Usuario).filter(Usuario.nombre_usuario == "admin").first()

@@ -390,7 +390,7 @@ def iniciar_sistema():
                 con.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_usuarios_correo ON usuarios(correo) WHERE correo IS NOT NULL"))
             con.commit()
         except Exception:
-            pass
+            con.rollback()
 
     bd = SesionLocal()
     admin = bd.query(Usuario).filter(Usuario.nombre_usuario == "admin").first()

@@ -453,6 +453,27 @@ def health():
     return {"status": "ok"}
 
 
+# ── Test email (solo admin) ────────────────────────────────────────
+@app.post("/auth/test-email")
+def test_email(usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    if usuario_actual.rol != "admin":
+        raise HTTPException(status_code=403, detail="Solo admin")
+    from .email_utils import _enviar_sync, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS
+    try:
+        _enviar_sync(
+            to=usuario_actual.correo or SMTP_USER,
+            subject="[CyberLab] Test de correo",
+            html="<p>Si ves esto, el sistema de correos funciona correctamente. ✅</p>"
+        )
+        return {"ok": True, "mensaje": f"Correo enviado a {usuario_actual.correo or SMTP_USER}",
+                "smtp_host": SMTP_HOST, "smtp_port": SMTP_PORT, "smtp_user": SMTP_USER,
+                "smtp_pass_set": bool(SMTP_PASS)}
+    except Exception as e:
+        return {"ok": False, "error": str(e),
+                "smtp_host": SMTP_HOST, "smtp_port": SMTP_PORT, "smtp_user": SMTP_USER,
+                "smtp_pass_set": bool(SMTP_PASS)}
+
+
 # ── Auth ──────────────────────────────────────────────────────────
 
 @app.post("/iniciar-sesion")

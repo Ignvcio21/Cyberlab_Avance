@@ -9,9 +9,13 @@ class Usuario(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     nombre_usuario = Column(String, unique=True, index=True, nullable=False)
+    nombre = Column(String, nullable=True)
+    correo = Column(String, unique=True, index=True, nullable=True)
     contrasena = Column(String, nullable=False)
     rol = Column(String, nullable=False, default="estudiante")
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
+    token_reset = Column(String, nullable=True)
+    token_reset_expira = Column(DateTime(timezone=True), nullable=True)
 
     acciones = relationship("AccionUsuario", back_populates="usuario")
     progreso = relationship("ProgresoUsuario", back_populates="usuario")
@@ -269,3 +273,57 @@ class BloqueoEscenario(Base):
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("escenario_id", "direccion_ip", name="uq_bloqueo_escenario_ip"),)
+
+
+# ==========================================================
+# EJERCICIOS CREADOS POR DOCENTE
+# ==========================================================
+
+class EjercicioDocente(Base):
+    __tablename__ = "ejercicios_docente"
+
+    id = Column(Integer, primary_key=True, index=True)
+    titulo = Column(String, nullable=False)
+    descripcion = Column(Text, nullable=False)
+    instrucciones = Column(Text, nullable=True)
+    tipo = Column(String, nullable=False, default="ataque")  # ataque | defensa
+    tiempo_minutos = Column(Integer, nullable=False, default=10)
+    contexto_generado = Column(Text, nullable=True)  # escenario IA
+    nivel = Column(Integer, nullable=False, default=1)  # 1-7
+    activo = Column(Boolean, default=True, nullable=False)
+    creado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
+
+    creador = relationship("Usuario", foreign_keys=[creado_por_id])
+    items = relationship("ItemEjercicioDocente", back_populates="ejercicio", cascade="all, delete-orphan", order_by="ItemEjercicioDocente.orden")
+    entregas = relationship("EntregaEjercicioDocente", back_populates="ejercicio", cascade="all, delete-orphan")
+
+
+class ItemEjercicioDocente(Base):
+    __tablename__ = "items_ejercicio_docente"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ejercicio_id = Column(Integer, ForeignKey("ejercicios_docente.id"), nullable=False, index=True)
+    descripcion = Column(Text, nullable=False)
+    orden = Column(Integer, nullable=False, default=0)
+
+    ejercicio = relationship("EjercicioDocente", back_populates="items")
+
+
+class EntregaEjercicioDocente(Base):
+    __tablename__ = "entregas_ejercicio_docente"
+    __table_args__ = (UniqueConstraint("ejercicio_id", "usuario_id", name="uq_entrega_ejercicio_usuario"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    ejercicio_id = Column(Integer, ForeignKey("ejercicios_docente.id"), nullable=False, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    respuesta = Column(Text, nullable=True)
+    estado = Column(String, nullable=False, default="entregado")  # entregado | evaluado
+    nota = Column(Float, nullable=True)
+    comentarios_docente = Column(Text, nullable=True)
+    ayudas_pedidas = Column(Integer, nullable=False, default=0)
+    fecha_entrega = Column(DateTime(timezone=True), server_default=func.now())
+    fecha_evaluacion = Column(DateTime(timezone=True), nullable=True)
+
+    ejercicio = relationship("EjercicioDocente", back_populates="entregas")
+    usuario = relationship("Usuario", foreign_keys=[usuario_id])

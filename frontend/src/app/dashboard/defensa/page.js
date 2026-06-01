@@ -25,39 +25,39 @@ const getAuthHeaders = () => ({
 // ================================================================
 const POOL_DEF = {
   // Eventos
-  eventos:           { cmd: "eventos",               desc: "Consultar eventos del sistema" },
-  eventosRecientes:  { cmd: "eventos recientes",     desc: "Revisar eventos recientes" },
-  eventosFB:         { cmd: "eventos fuerza-bruta",  desc: "Filtrar eventos de fuerza bruta" },
-  eventosEscaneo:    { cmd: "eventos escaneo",       desc: "Filtrar eventos de escaneo" },
-  eventosRed:        { cmd: "eventos red",           desc: "Revisar eventos de red" },
+  eventos:           { cmd: "journalctl -n 50",                      desc: "Consultar eventos del sistema" },
+  eventosRecientes:  { cmd: "journalctl -n 10",                      desc: "Revisar eventos recientes" },
+  eventosFB:         { cmd: "grep Failed /var/log/auth.log",         desc: "Filtrar eventos de fuerza bruta" },
+  eventosEscaneo:    { cmd: "grep scan /var/log/syslog",             desc: "Filtrar eventos de escaneo" },
+  eventosRed:        { cmd: "netstat -an",                           desc: "Revisar eventos de red" },
   // Alertas
-  alertas:           { cmd: "alertas",               desc: "Consultar alertas activas" },
-  alertasCriticas:   { cmd: "alertas criticas",      desc: "Revisar alertas críticas" },
-  alertasActivas:    { cmd: "alertas activas",       desc: "Listar alertas en curso" },
+  alertas:           { cmd: "tail -50 /var/log/syslog",              desc: "Consultar alertas activas" },
+  alertasCriticas:   { cmd: "grep -i crit /var/log/syslog",         desc: "Revisar alertas críticas" },
+  alertasActivas:    { cmd: "tail -f /var/log/syslog",               desc: "Listar alertas en curso" },
   // Análisis de IPs
-  analizarIp:        { cmd: "analizar-ip <IP>",      desc: "Analizar IP sospechosa" },
-  historialIp:       { cmd: "historial-ip <IP>",     desc: "Revisar historial de IP" },
-  traficoIp:         { cmd: "trafico-ip <IP>",       desc: "Analizar tráfico de IP" },
+  analizarIp:        { cmd: "nmap -sV <IP>",                         desc: "Analizar IP sospechosa" },
+  historialIp:       { cmd: "grep <IP> /var/log/auth.log",           desc: "Revisar historial de IP" },
+  traficoIp:         { cmd: "tcpdump host <IP> -c 20",               desc: "Analizar tráfico de IP" },
   // Bloqueo
-  bloquearIp:        { cmd: "bloquear-ip <IP>",      desc: "Bloquear IP atacante" },
-  desbloquearIp:     { cmd: "desbloquear-ip <IP>",   desc: "Desbloquear IP" },
-  ipsBloqueadas:     { cmd: "ips-bloqueadas",        desc: "Verificar IPs bloqueadas" },
+  bloquearIp:        { cmd: "iptables -A INPUT -s <IP> -j DROP",     desc: "Bloquear IP atacante" },
+  desbloquearIp:     { cmd: "iptables -D INPUT -s <IP> -j DROP",     desc: "Desbloquear IP" },
+  ipsBloqueadas:     { cmd: "iptables -L INPUT -n",                  desc: "Verificar IPs bloqueadas" },
   // Logs
-  logs:              { cmd: "logs",                  desc: "Consultar logs del sistema" },
-  logsAuth:          { cmd: "logs auth",             desc: "Revisar logs de autenticación" },
-  logsFirewall:      { cmd: "logs firewall",         desc: "Revisar logs del firewall" },
-  logsSsh:           { cmd: "logs ssh",              desc: "Revisar logs SSH" },
-  logsWeb:           { cmd: "logs web",              desc: "Revisar logs del servidor web" },
+  logs:              { cmd: "cat /var/log/syslog",                   desc: "Consultar logs del sistema" },
+  logsAuth:          { cmd: "cat /var/log/auth.log",                 desc: "Revisar logs de autenticación" },
+  logsFirewall:      { cmd: "iptables -L -v",                        desc: "Revisar logs del firewall" },
+  logsSsh:           { cmd: "grep sshd /var/log/auth.log",           desc: "Revisar logs SSH" },
+  logsWeb:           { cmd: "tail -50 /var/log/nginx/access.log",    desc: "Revisar logs web" },
   // Estado
-  estadoSistema:     { cmd: "estado-sistema",        desc: "Verificar estado del sistema" },
-  estadoFirewall:    { cmd: "estado-firewall",       desc: "Verificar estado del firewall" },
-  estadoServidor:    { cmd: "estado-servidor",       desc: "Verificar estado del servidor" },
+  estadoSistema:     { cmd: "systemctl status",                      desc: "Verificar estado del sistema" },
+  estadoFirewall:    { cmd: "iptables -L -n -v",                     desc: "Verificar estado del firewall" },
+  estadoServidor:    { cmd: "top -bn1",                              desc: "Verificar estado del servidor" },
   // Reporte
-  generarReporte:    { cmd: "generar-reporte",       desc: "Generar reporte de incidente" },
+  generarReporte:    { cmd: "export-report",                         desc: "Generar reporte de incidente" },
   // Extras
-  whoami:            { cmd: "whoami",                desc: "Identificar usuario activo" },
-  estadoRed:         { cmd: "estado-red",            desc: "Verificar estado de la red" },
-  correlacionar:     { cmd: "correlacionar",         desc: "Correlacionar eventos y alertas" },
+  whoami:            { cmd: "whoami",                                desc: "Identificar usuario activo" },
+  estadoRed:         { cmd: "netstat -tulpn",                        desc: "Verificar estado de la red" },
+  correlacionar:     { cmd: "lastb -n 20",                           desc: "Correlacionar eventos y alertas" },
 }
 
 // ================================================================
@@ -386,27 +386,27 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
 
 // Mapeo exacto comando → clave checklist (defensa)
 const CMD_A_CLAVE_DEF = {
-  "eventos":              "eventos",
-  "eventos recientes":    "eventosRecientes",
-  "eventos fuerza-bruta": "eventosFB",
-  "eventos escaneo":      "eventosEscaneo",
-  "eventos red":          "eventosRed",
-  "alertas":              "alertas",
-  "alertas criticas":     "alertasCriticas",
-  "alertas activas":      "alertasActivas",
-  "ips-bloqueadas":       "ipsBloqueadas",
-  "logs":                 "logs",
-  "logs auth":            "logsAuth",
-  "logs firewall":        "logsFirewall",
-  "logs ssh":             "logsSsh",
-  "logs web":             "logsWeb",
-  "estado-sistema":       "estadoSistema",
-  "estado-firewall":      "estadoFirewall",
-  "estado-servidor":      "estadoServidor",
-  "generar-reporte":      "generarReporte",
-  "whoami":               "whoami",
-  "estado-red":           "estadoRed",
-  "correlacionar":        "correlacionar",
+  "journalctl -n 50":                    "eventos",
+  "journalctl -n 10":                    "eventosRecientes",
+  "grep failed /var/log/auth.log":       "eventosFB",
+  "grep scan /var/log/syslog":           "eventosEscaneo",
+  "netstat -an":                         "eventosRed",
+  "tail -50 /var/log/syslog":           "alertas",
+  "grep -i crit /var/log/syslog":       "alertasCriticas",
+  "tail -f /var/log/syslog":            "alertasActivas",
+  "iptables -l input -n":               "ipsBloqueadas",
+  "cat /var/log/syslog":                "logs",
+  "cat /var/log/auth.log":              "logsAuth",
+  "iptables -l -v":                     "logsFirewall",
+  "grep sshd /var/log/auth.log":        "logsSsh",
+  "tail -50 /var/log/nginx/access.log": "logsWeb",
+  "systemctl status":                   "estadoSistema",
+  "iptables -l -n -v":                  "estadoFirewall",
+  "top -bn1":                           "estadoServidor",
+  "export-report":                      "generarReporte",
+  "whoami":                             "whoami",
+  "netstat -tulpn":                     "estadoRed",
+  "lastb -n 20":                        "correlacionar",
 }
 
 // ================================================================
@@ -456,15 +456,36 @@ export default function DefensaDashboard() {
   const [tiempoSes,   setTiempoSes]   = useState(0)
   const [stats,       setStats]       = useState({ total_eventos: 0, total_alertas: 0 })
 
+  // ── Modo ejercicios docente ──
+  const [ejerciciosDocente,  setEjerciciosDocente]  = useState([])
+  const [ejDocenteActivo,    setEjDocenteActivo]    = useState(null)
+  const [checklistManual,    setChecklistManual]    = useState({})
+  const [timerDocente,       setTimerDocente]       = useState(0)
+  const [timerDocenteActivo, setTimerDocenteActivo] = useState(false)
+  const [ayudasDocente,      setAyudasDocente]      = useState(0)
+  const [pistaDocente,       setPistaDocente]       = useState("")
+  const [mostrarPista,       setMostrarPista]       = useState(false)
+  const [cargandoPista,      setCargandoPista]      = useState(false)
+  const [nivelDocenteAbierto,setNivelDocenteAbierto] = useState(1)
+  const modoDocente = true
+  const [confirmEjDocente, setConfirmEjDocente] = useState(null)
+  // ── Popup fin de ejercicio ──
+  const [popupFin,    setPopupFin]    = useState(false)
+  const [popupFinPct, setPopupFinPct] = useState(0)
+  const [popupGano,   setPopupGano]   = useState(false)
+  // ── Ataque en tiempo real ──
+  const [faseAtaqueDisparada, setFaseAtaqueDisparada] = useState([])
+
   const claveLS = useMemo(() =>
     nombreUsuario ? `cyberlab_defensa_${nombreUsuario}` : null,
   [nombreUsuario])
 
   // Derivados
-  const ejActual   = ejercicios[nivelActivo]?.actual || 1
-  const defActual  = NIVELES_DEFENSA[nivelActivo]?.ejercicios?.[ejActual]
-  const pct        = calcularPct(checklist)
-  const cTimer     = tiempoRest <= 60 ? "#ef4444" : tiempoRest <= 120 ? "#f59e0b" : "#00daf3"
+  const ejActual    = ejercicios[nivelActivo]?.actual || 1
+  const defActual   = NIVELES_DEFENSA[nivelActivo]?.ejercicios?.[ejActual]
+  const pct         = calcularPct(checklist)
+  const timerClass  = tiempoRest <= 60 ? "danger" : tiempoRest <= 120 ? "warning" : ""
+  const [bannerVisible, setBannerVisible] = useState(true)
 
   const nivelDesbloqueado = (n) => {
     if (n === 1) return true
@@ -638,17 +659,17 @@ export default function DefensaDashboard() {
 
     let clave = null
 
-    // Comandos con IP — caso especial
-    if (cmdN.startsWith("bloquear-ip ") && def.checklist.includes("bloquearIp")) {
-      if (sal.includes("bloqueada") || sal.includes("blocked") || sal.includes("aplicada")) clave = "bloquearIp"
-    } else if (cmdN.startsWith("analizar-ip ") && def.checklist.includes("analizarIp")) {
-      clave = "analizarIp"
-    } else if (cmdN.startsWith("historial-ip ") && def.checklist.includes("historialIp")) {
-      clave = "historialIp"
-    } else if (cmdN.startsWith("trafico-ip ") && def.checklist.includes("traficoIp")) {
-      clave = "traficoIp"
-    } else if (cmdN.startsWith("desbloquear-ip ") && def.checklist.includes("desbloquearIp")) {
+    // Comandos con IP — caso especial (sintaxis real Linux/iptables)
+    if (cmdN.startsWith("iptables -a input -s ") && def.checklist.includes("bloquearIp")) {
+      if (sal.includes("bloqueada") || sal.includes("blocked") || sal.includes("drop") || sal.includes("regla")) clave = "bloquearIp"
+    } else if (cmdN.startsWith("iptables -d input -s ") && def.checklist.includes("desbloquearIp")) {
       clave = "desbloquearIp"
+    } else if (cmdN.startsWith("nmap ") && def.checklist.includes("analizarIp")) {
+      clave = "analizarIp"
+    } else if (cmdN.startsWith("grep ") && cmdN.includes("/var/log/auth.log") && !cmdN.includes("failed") && !cmdN.includes("sshd") && def.checklist.includes("historialIp")) {
+      clave = "historialIp"
+    } else if ((cmdN.startsWith("tcpdump ") && cmdN.includes("host")) && def.checklist.includes("traficoIp")) {
+      clave = "traficoIp"
     } else {
       const c = CMD_A_CLAVE_DEF[cmdN]
       if (c && def.checklist.includes(c)) clave = c
@@ -695,6 +716,7 @@ export default function DefensaDashboard() {
         setHistorial(p => [...p, prompt, ...String(sal).split("\n")])
       }
       await actualizarTrasComando(cmdN, sal)
+      actualizarChecklistDocente(cmdN, sal)
       await cargarStats()
     } catch {
       setHistorial(p => [...p, prompt, "Error: no se pudo conectar con la terminal defensiva."])
@@ -756,9 +778,211 @@ export default function DefensaDashboard() {
       setNivelActivo(g.nivelActivo || 1)
       if (g.ejercicios) setEjercicios(prev => ({ ...prev, ...g.ejercicios }))
     }
+    // Cargar ejercicios del docente para modo defensa
+    fetch(`${API}/ejercicios-docente/tipo/defensa`, { headers: getAuthHeaders() })
+      .then(r => r.json()).then(d => { if (Array.isArray(d)) setEjerciciosDocente(d) }).catch(() => {})
     const iv = setInterval(cargarStats, 5000)
     return () => clearInterval(iv)
   }, [nombreUsuario])
+
+  useEffect(() => {
+    if (!timerDocenteActivo || !ejDocenteActivo) return
+    const iv = setInterval(() => {
+      setTimerDocente(p => {
+        if (p <= 1) {
+          clearInterval(iv); setTimerDocenteActivo(false)
+          setFaseAtaqueDisparada([])
+          // Auto-entregar con el progreso actual
+          setChecklistManual(cl => {
+            const pct = Math.round(Object.values(cl).filter(Boolean).length / Math.max(Object.keys(cl).length, 1) * 100)
+            if (ejDocenteActivo) {
+              fetch(`${API}/ejercicios-docente/${ejDocenteActivo.id}/entregar`, {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ respuesta: `Tiempo agotado. Progreso: ${pct}%.`, ayudas_pedidas: 0 }),
+              }).catch(() => {})
+            }
+            return cl
+          })
+          setChecklistManual(cl2 => {
+            const pctFinal = Math.round(Object.values(cl2).filter(Boolean).length / Math.max(Object.keys(cl2).length, 1) * 100)
+            setPopupFinPct(pctFinal); setPopupGano(false); setPopupFin(true)
+            return cl2
+          })
+          setHistorial(prev => [...prev,
+            "────────────────────────────────────────────",
+            "🔴 [SISTEMA] TIEMPO AGOTADO — El ejercicio ha finalizado.",
+            "   El atacante ha completado su objetivo. Ejercicio enviado automáticamente.",
+          ])
+          return 0
+        }
+        return p - 1
+      })
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [timerDocenteActivo, ejDocenteActivo])
+
+  const itemCompletadoPorComando = (descripcion, cmdNorm) => {
+    const d = descripcion.toLowerCase(); const c = cmdNorm.toLowerCase()
+    const reglas = [
+      { kw: ["alertas","alerta","ids"],                     cmds: ["show alerts","alert","eventos"] },
+      { kw: ["eventos","evento","log"],                     cmds: ["show events","log","eventos","journalctl"] },
+      { kw: ["bloquear","bloqueo","firewall","deny"],       cmds: ["block ip","iptables","ufw","firewall"] },
+      { kw: ["tráfico","trafico","sniff","captura"],        cmds: ["show traffic","tcpdump","tshark","wireshark"] },
+      { kw: ["usuarios","usuario","cuentas"],               cmds: ["show users","enumerate users","whoami"] },
+      { kw: ["sesiones","sesión","conexiones activas"],     cmds: ["show sessions","netstat","ss -"] },
+      { kw: ["procesos","proceso"],                         cmds: ["show processes","ps aux","ps -"] },
+      { kw: ["intentos fallidos","bruteforce","fuerza bruta"], cmds: ["show failed","failed logins","auth.log"] },
+      { kw: ["verificar","verificación","estado"],          cmds: ["status","show blocked","verificar"] },
+      { kw: ["correlac","correlación","análisis"],          cmds: ["correlacionar","correlac","analizar"] },
+      { kw: ["documentar","registrar","detalles del incidente","futuros análisis","futuros analisis"], cmds: ["generar-reporte","export","logs"] },
+      { kw: ["reporte","informe","reportar","reporta","dirección de seguridad","medidas tomadas"], cmds: ["generar-reporte","correlacionar","export"] },
+      { kw: ["forense","artefactos","evidencia"],           cmds: ["forensic","strings","volatility","autopsy"] },
+      { kw: ["malware","threat","caza"],                    cmds: ["yara","zeek","hunt","threat"] },
+    ]
+    for (const r of reglas) {
+      if (r.kw.some(k => d.includes(k)) && r.cmds.some(cmd => c.includes(cmd))) return true
+    }
+    return false
+  }
+
+  const pedirPistaDocente = async () => {
+    if (!ejDocenteActivo || cargandoPista) return
+    const itemPendiente = ejDocenteActivo.items.find(it => !checklistManual[it.id])
+    if (!itemPendiente) return
+    setCargandoPista(true)
+    setAyudasDocente(p => p + 1)
+    try {
+      const r = await fetch(`${API}/terminal`, {
+        method: "POST", headers: getAuthHeaders(),
+        body: JSON.stringify({
+          nombre_usuario: nombreUsuario,
+          comando: `hint: Estoy realizando un ejercicio de defensa SOC. El paso que debo completar es: "${itemPendiente.descripcion}". Dame una pista corta (máximo 2 líneas) sobre qué comando o herramienta usar, sin revelar la solución exacta.`
+        })
+      })
+      const d = await r.json()
+      setPistaDocente(d?.salida ?? "Analiza el contexto del ejercicio y piensa qué herramienta defensiva corresponde a este paso.")
+      setMostrarPista(true)
+    } catch {
+      setPistaDocente("Revisa el contexto del ejercicio e identifica qué herramienta de análisis corresponde a este paso.")
+      setMostrarPista(true)
+    } finally { setCargandoPista(false) }
+  }
+
+  const iniciarEjDocente = (ej) => {
+    const cl = {}
+    ej.items.forEach(it => { cl[it.id] = false })
+    setEjDocenteActivo(ej)
+    setChecklistManual(cl)
+    setAyudasDocente(0); setPistaDocente(""); setMostrarPista(false)
+    setFaseAtaqueDisparada([])
+    const totalSeg = (ej.tiempo_minutos || 10) * 60
+    setTimerDocente(totalSeg)
+    setTimerDocenteActivo(true)
+    setHistorial([
+      "CyberLab SOC Terminal — Modo Defensa activa",
+      `[SISTEMA] Ejercicio iniciado: ${ej.titulo}`,
+      "[SISTEMA] Monitoreo en curso. El atacante está activo — responde a los eventos.",
+      "────────────────────────────────────────────",
+    ])
+  }
+
+  // Genera el mensaje de ataque según la descripción del ítem y la fase
+  const generarMensajeAtaque = (item, faseIdx, totalFases, completado) => {
+    const ts = new Date().toLocaleTimeString("es-CL", { hour:"2-digit", minute:"2-digit", second:"2-digit" })
+    const desc = item.descripcion.toLowerCase()
+    const severity = faseIdx >= totalFases - 1 ? "🔴 CRÍTICO" : faseIdx >= totalFases / 2 ? "🟠 ALTO" : "🟡 MEDIO"
+
+    if (completado) {
+      return [
+        `[${ts}] ✅ ATAQUE BLOQUEADO — Fase ${faseIdx + 1}/${totalFases} neutralizada`,
+        `         El analista respondió a tiempo. El atacante retrocede.`,
+      ]
+    }
+
+    let lineas = []
+    if (desc.includes("alerta") || desc.includes("tráfico") || desc.includes("ids") || desc.includes("inusual")) {
+      lineas = [
+        `[${ts}] ${severity} IDS: Tráfico anómalo detectado hacia servidor interno`,
+        `         Paquetes/seg: ELEVADO | Fuente: múltiples IPs | Puerto: 443, 8080`,
+      ]
+    } else if (desc.includes("fuerza bruta") || desc.includes("login") || desc.includes("autenticación") || desc.includes("acceso")) {
+      lineas = [
+        `[${ts}] ${severity} BRUTE FORCE: ${30 + faseIdx * 15} intentos SSH fallidos detectados`,
+        `         Fuente: 192.168.${10 + faseIdx}.${50 + faseIdx * 7} | Objetivo: srv-interno | ACCIÓN REQUERIDA`,
+      ]
+    } else if (desc.includes("bloquear") || desc.includes("mitigar") || desc.includes("medidas") || desc.includes("contener")) {
+      lineas = [
+        `[${ts}] ${severity} ESCALADA: El atacante aumenta la intensidad del ataque`,
+        `         Sin respuesta del analista — acceso SSH intentado con éxito parcial`,
+      ]
+    } else if (desc.includes("correlac") || desc.includes("origen") || desc.includes("analizar") || desc.includes("naturaleza")) {
+      lineas = [
+        `[${ts}] ${severity} RECONOCIMIENTO: Escaneo de red activo desde IP externa`,
+        `         Puertos mapeados: 22, 80, 443, 3306 | Fingerprinting del SO detectado`,
+      ]
+    } else if (desc.includes("document") || desc.includes("reporte") || desc.includes("registr") || desc.includes("reportar")) {
+      lineas = [
+        `[${ts}] ${severity} PERSISTENCIA: Atacante intentando instalar backdoor`,
+        `         Proceso sospechoso detectado: nc -lvp 4444 | PID: ${800 + faseIdx * 11}`,
+      ]
+    } else {
+      lineas = [
+        `[${ts}] ${severity} INCIDENTE Fase ${faseIdx + 1}/${totalFases}: ${item.descripcion}`,
+        `         El sistema requiere respuesta del analista SOC`,
+      ]
+    }
+    return lineas
+  }
+
+  // useEffect: dispara fases de ataque en tiempo real según el timer del ejercicio
+  useEffect(() => {
+    if (!timerDocenteActivo || !ejDocenteActivo) return
+    const totalSeg = (ejDocenteActivo.tiempo_minutos || 10) * 60
+    const items = ejDocenteActivo.items
+    if (!items.length) return
+    const phaseInterval = totalSeg / items.length
+    const elapsed = totalSeg - timerDocente
+
+    items.forEach((item, idx) => {
+      const faseThreshold = (idx + 1) * phaseInterval
+      if (elapsed >= faseThreshold && !faseAtaqueDisparada.includes(idx)) {
+        setFaseAtaqueDisparada(prev => [...prev, idx])
+        const completado = checklistManual[item.id] === true
+        const mensajes = generarMensajeAtaque(item, idx, items.length, completado)
+        setHistorial(prev => [...prev, "────────────────────────────────────────────", ...mensajes])
+      }
+    })
+  }, [timerDocente, timerDocenteActivo, ejDocenteActivo])
+
+  const actualizarChecklistDocente = (cmdNorm, salida) => {
+    if (!ejDocenteActivo) return
+    if (String(salida).toLowerCase().includes("command not found")) return
+    setChecklistManual(prev => {
+      const nuevo = { ...prev }; let cambio = false
+      ejDocenteActivo.items.forEach(it => {
+        if (!nuevo[it.id] && itemCompletadoPorComando(it.descripcion, cmdNorm)) { nuevo[it.id] = true; cambio = true }
+      })
+      if (!cambio) return prev
+      if (Object.values(nuevo).every(Boolean)) {
+        setTimerDocenteActivo(false)
+        setFaseAtaqueDisparada([])
+        const tiempoUsado = (ejDocenteActivo.tiempo_minutos * 60) - timerDocente
+        setPopupFinPct(100); setPopupGano(true); setPopupFin(true)
+        fetch(`${API}/ejercicios-docente/${ejDocenteActivo.id}/entregar`, {
+          method: "POST", headers: getAuthHeaders(),
+          body: JSON.stringify({ respuesta: `Completado vía terminal defensiva. Tiempo: ${tiempoUsado}s. Ayudas: ${ayudasDocente}`, ayudas_pedidas: ayudasDocente }),
+        }).catch(() => {})
+      }
+      return nuevo
+    })
+  }
+
+  const NOMBRES_NIVELES_DEF = {1:"Monitoreo Básico",2:"Detección FB",3:"Escaneo — Defensa",4:"Investigación",5:"Respuesta Activa",6:"Multi-vector",7:"Defensa Integral"}
+
+  const pctDocente = ejDocenteActivo
+    ? Math.round(Object.values(checklistManual).filter(Boolean).length / Math.max(Object.keys(checklistManual).length, 1) * 100)
+    : 0
 
   useEffect(() => {
     if (!inicioSes) return
@@ -787,270 +1011,411 @@ export default function DefensaDashboard() {
 
             <BarraSuperior paginaActiva="defensa" />
 
-            {/* ── Header ── */}
-            <header className="hero-panel">
-              <div className="hero-left">
-                <div className="hero-badge" style={{ background: "rgba(0,218,243,0.10)", borderColor: "rgba(0,218,243,0.25)", color: "var(--terciario-dim)" }}>
-                  🛡 MODO DEFENSA — CYBERLAB SOC
+            {/* ── BANNER ejercicio activo (verde SOC) ── */}
+            {estadoEsc !== "inactivo" && bannerVisible && (
+              <div className={`banner${estadoEsc === "resuelto" ? " resolved" : ""}`}
+                style={estadoEsc !== "resuelto" ? { background:"rgba(48,209,88,0.10)", borderColor:"rgba(48,209,88,0.28)" } : {}}>
+                <span className="banner-icon">{estadoEsc === "resuelto" ? "✅" : "🛡"}</span>
+                <div>
+                  {estadoEsc === "resuelto"
+                    ? <><strong>¡Incidente mitigado!</strong> Nivel {nivelActivo} — Ej. {ejActual}/5. Genera el reporte de incidente.</>
+                    : <><strong style={{ color:"#30d158" }}>Ejercicio activo:</strong> Nivel {nivelActivo} — Ejercicio {ejActual}/5. Timer corriendo. <strong style={{ color:"#30d158" }}>{fmt(tiempoRest)}</strong> restantes.
+                      {ayudas > 0 && <span style={{ color:"#ff9f0a", marginLeft:8 }}>⚠ {ayudas} ayuda{ayudas>1?"s":""} (-{Math.min(ayudas*5,30)}%)</span>}</>
+                  }
                 </div>
-                <h1 style={{ margin: "8px 0 4px", fontSize: 22, color: "#fff", fontFamily: "var(--sans)", fontWeight: 700 }}>
-                  Centro de Operaciones Defensivas
+                <button className="banner-close" onClick={() => setBannerVisible(false)}>✕</button>
+              </div>
+            )}
+
+            {/* ── PAGE HEADER ── */}
+            <header style={{ marginBottom:4, display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
+              <div>
+                <h1 style={{ margin:"0 0 4px", fontSize:32, fontWeight:800, letterSpacing:"-1px", color:"#f5f5f7", lineHeight:1 }}>
+                  Dashboard
                 </h1>
-                <p className="hero-subtitle">
-                  Analista activo: <strong style={{ color: "var(--terciario-dim)" }}>{nombreUsuario}</strong>
+                <p style={{ margin:0, fontSize:15, color:"#8e8e93" }}>
+                  {nombreUsuario && <><strong style={{ color:"#aeaeb2" }}>{nombreUsuario}</strong> · </>}
+                  🛡 Defensa SOC · {NOMBRES_NIVELES_DEF[nivelActivo]?.nombre || "Centro de Operaciones"} · Ej. {ejActual}/5
                 </p>
-                <div className="hero-meta">
-                  <span className="meta-chip">⏱ Sesión: {tiempoSes}s</span>
-                  <span className="meta-chip" style={{ background: "rgba(0,218,243,0.10)", borderColor: "rgba(0,218,243,0.25)", color: "var(--terciario-dim)" }}>
-                    🛡 Nivel {nivelActivo}: {NIVELES_DEFENSA[nivelActivo]?.nombre} — Ej. {ejActual}/5
-                  </span>
-                  {ayudas > 0 && (
-                    <span className="meta-chip meta-chip-warn">⚠ Ayudas: {ayudas} (-{Math.min(ayudas * 5, 30)}%)</span>
-                  )}
-                </div>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => router.push("/dashboard")} className="boton-secundario" style={{ fontSize: 13 }}>
-                  ⚔ Modo Ataque
-                </button>
-                <button onClick={() => {
-                  localStorage.removeItem("nombre_usuario")
-                  localStorage.removeItem("rol_usuario")
-                  localStorage.removeItem("token")
-                  if (claveLS) localStorage.removeItem(claveLS)
-                  router.push("/")
-                }} className="logout-button">Cerrar sesión</button>
-              </div>
+              {tiempoSes > 0 && (
+                <span style={{ fontFamily:"var(--mono)", fontSize:13, color:"#8e8e93", background:"#1c1c1e", border:"1px solid #2c2c2e", padding:"6px 12px", borderRadius:8, flexShrink:0 }}>
+                  ⏱ {tiempoSes}s
+                </span>
+              )}
             </header>
 
-            {/* ── Progreso por nivel ── */}
-            <section className="ejercicios-panel">
-              <div className="ejercicios-titulo">🛡 Progreso defensivo por nivel</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 8 }}>
-                {[1,2,3,4,5,6,7].map(n => {
-                  const ej    = ejercicios[n] || { actual: 1, completados: 0 }
-                  const desl  = !nivelDesbloqueado(n)
-                  const activo = nivelActivo === n
-                  return (
-                    <button
-                      key={n}
-                      onClick={() => !desl && setNivelActivo(n)}
-                      disabled={desl}
-                      style={{
-                        padding: "10px 6px", borderRadius: 10,
-                        border: activo ? "1.5px solid var(--terciario)" : "1px solid rgba(255,255,255,0.08)",
-                        background: activo ? "rgba(0,218,243,0.10)" : desl ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
-                        color: desl ? "var(--texto-apagado)" : activo ? "var(--terciario-dim)" : "var(--texto-secundario)",
-                        cursor: desl ? "not-allowed" : "pointer",
-                        textAlign: "center", fontSize: 11, fontWeight: 700,
-                        opacity: desl ? 0.4 : 1, transition: "all .18s",
-                      }}
-                    >
-                      <div style={{ fontSize: 16, marginBottom: 4 }}>
-                        {desl ? "🔒" : ej.completados >= 5 ? "✅" : `D${n}`}
-                      </div>
-                      <div style={{ fontSize: 10, marginBottom: 4, fontFamily: "var(--mono)", lineHeight: 1.3 }}>
-                        {NIVELES_DEFENSA[n]?.nombre}
-                      </div>
-                      <div style={{ fontSize: 10, color: ej.completados >= 5 ? "var(--terciario-dim)" : "var(--texto-apagado)", fontFamily: "var(--mono)" }}>
-                        {ej.completados}/5 ej.
-                      </div>
-                      <div style={{ marginTop: 5, height: 3, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-                        <div style={{
-                          height: "100%", borderRadius: 999,
-                          background: ej.completados >= 5 ? "var(--terciario)" : "linear-gradient(90deg,#00daf3,#00a3ff)",
-                          width: `${ej.completados / 5 * 100}%`, transition: "width .4s"
-                        }} />
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </section>
-
-            {/* ── Objetivo del ejercicio ── */}
-            <section className="learning-panel">
-              <h2 style={{ margin: "0 0 14px" }}>
-                🛡 Nivel {nivelActivo} — {NIVELES_DEFENSA[nivelActivo]?.nombre}
-              </h2>
-              <p style={{ color: "var(--texto-secundario)", margin: "0 0 14px", fontSize: 13 }}>
-                {NIVELES_DEFENSA[nivelActivo]?.descripcion}
-              </p>
-              <div className="learning-grid">
-                <div className="learning-box">
-                  <strong style={{ color: "#fff", display: "block", marginBottom: 8 }}>
-                    {defActual?.titulo || "Inicia una simulación defensiva"}
-                  </strong>
-                  <p style={{ marginTop: 0, marginBottom: 10, fontSize: 13, color: "var(--texto-secundario)" }}>
-                    {defActual?.contexto?.slice(0, 180)}{"..."}
-                  </p>
-                  {defActual && (
-                    <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
-                      {defActual.checklist.map((p, i) => (
-                        <li key={p} style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--texto-secundario)" }}>
-                          {i + 1}. {DESC_PASO(p)}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+            {/* ── STATS — 3 tarjetas (verde SOC) ── */}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+              {[
+                { label:"EVENTOS DETECTADOS", valor: stats.total_eventos, colorClass:"blue",   sub:"eventos / eventos recientes" },
+                { label:"ALERTAS ACTIVAS",    valor: stats.total_alertas, colorClass:"orange",  sub:"alertas / alertas criticas" },
+                { label:"NIVEL SOC ACTIVO",   valor: `${nivelActivo}/7`,  colorClass:"green",   sub:`Ej. ${ejActual} de 5` },
+              ].map(({ label, valor, colorClass, sub }) => (
+                <div key={label} className="stat-card-mock">
+                  <div className="stat-label-mock">{label}</div>
+                  <div className={`stat-value-mock ${colorClass}`}>{valor}</div>
+                  <div className="stat-delta-mock">{sub}</div>
                 </div>
-                <div className="learning-box">
-                  <strong style={{ color: "#fff", display: "block", marginBottom: 8 }}>Comandos defensivos disponibles</strong>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                    {[
-                      "eventos", "eventos recientes", "alertas", "alertas criticas",
-                      "logs auth", "logs firewall", "logs ssh",
-                      "analizar-ip <IP>", "historial-ip <IP>", "trafico-ip <IP>",
-                      "bloquear-ip <IP>", "ips-bloqueadas",
-                      "estado-sistema", "estado-firewall", "estado-servidor",
-                    ].map(c => (
-                      <code key={c} style={{
-                        background: "rgba(0,218,243,0.08)", color: "var(--terciario-dim)",
-                        padding: "2px 6px", borderRadius: 5, fontSize: 11, fontFamily: "var(--mono)"
-                      }}>{c}</code>
-                    ))}
+              ))}
+            </div>
+
+            {/* ── NIVELES DEFENSA ── */}
+            {(() => {
+              const porNivel = {}
+              ejerciciosDocente.forEach(ej => { const n=ej.nivel||1; if(!porNivel[n]) porNivel[n]=[]; porNivel[n].push(ej) })
+              const n    = nivelDocenteAbierto || 1
+              const lista = porNivel[n] || []
+              return (
+                <div className="card-mock">
+                  <div className="card-mock-header">
+                    <div>
+                      <div className="card-mock-title">Niveles de entrenamiento</div>
+                      <div className="card-mock-subtitle">7 niveles SOC · Nivel {nivelActivo} activo</div>
+                    </div>
+                    <span className="card-mock-tag green">
+                      {(ejercicios[nivelActivo]?.completados||0)} / 5 completados
+                    </span>
+                  </div>
+                  <div className="card-mock-body">
+                    <div className="levels-grid-mock">
+                      {[1,2,3,4,5,6,7].map(lv => {
+                        const comp  = ejercicios[lv]?.completados || 0
+                        const act   = lv === nivelActivo
+                        const done  = comp >= TOTAL_EJ
+                        const desbloqueado = nivelDesbloqueado(lv)
+                        const pctLv = done ? 100 : Math.round(comp/TOTAL_EJ*100)
+                        return (
+                          <button
+                            key={lv}
+                            className={`level-card-mock${act?" active":done?" done":""}`}
+                            style={act ? { borderColor:"#30d158", background:"rgba(48,209,88,0.12)" } :
+                                   done ? { borderColor:"rgba(48,209,88,0.35)", background:"rgba(48,209,88,0.08)" } : {}}
+                            onClick={() => { setNivelActivo(lv); setNivelDocenteAbierto(lv) }}
+                          >
+                            <div className="level-num-mock" style={act?{color:"#30d158"}:done?{color:"#30d158"}:{}}>{lv}</div>
+                            <div className="level-name-mock">{NOMBRES_NIVELES_DEF[lv]}</div>
+                            <div className="level-progress-mock">
+                              <div className="level-fill-mock" style={{ width:`${pctLv}%`, background: act||done ? "#30d158" : "#3a3a3c" }}/>
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {/* Ejercicios del docente */}
+                    {lista.length > 0 && (
+                      <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid #2c2c2e" }}>
+                        <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:"#8e8e93", marginBottom:10 }}>
+                          EJERCICIOS DOCENTE — {NOMBRES_NIVELES_DEF[n]}
+                        </div>
+                        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                          {lista.map(ej => {
+                            const activo = ejDocenteActivo?.id === ej.id
+                            return (
+                              <button key={ej.id} onClick={() => setConfirmEjDocente(ej)} style={{
+                                textAlign:"left", padding:"11px 14px", borderRadius:10, width:"100%",
+                                border: activo ? "1.5px solid #30d158" : "1px solid #2c2c2e",
+                                background: activo ? "rgba(48,209,88,0.10)" : "#242426",
+                                color: activo ? "#30d158" : "#f5f5f7", cursor:"pointer", transition:"all 0.15s",
+                                display:"flex", alignItems:"center", gap:12,
+                              }}>
+                                <div style={{ flex:1 }}>
+                                  <div style={{ fontWeight:700, fontSize:13, marginBottom:2 }}>{ej.titulo}</div>
+                                  <div style={{ fontSize:11, color:"#8e8e93" }}>{ej.items.length} punto{ej.items.length!==1?"s":""} · {ej.tiempo_minutos} min</div>
+                                </div>
+                                {activo && <span style={{ fontSize:11, fontWeight:700 }}>▶ Activo</span>}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {lista.length === 0 && (
+                      <div style={{ marginTop:14, paddingTop:14, borderTop:"1px solid #2c2c2e", fontSize:13, color:"#8e8e93", textAlign:"center" }}>
+                        El docente aún no ha publicado ejercicios de defensa en este nivel.
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            </section>
+              )
+            })()}
 
-            {/* ── Botón de inicio ── */}
-            <section className="action-panel">
-              <h2 style={{ margin: "0 0 4px" }}>Simulación Defensiva — Nivel {nivelActivo}</h2>
-              <p style={{ color: "var(--texto-secundario)", fontSize: 13 }}>
-                El sistema generará un incidente real que debes detectar, analizar y mitigar paso a paso.
-              </p>
-              <div className="status-box">
-                <span className="status-label">Estado</span>
-                <span className="status-value">{mensaje || "Esperando acción del analista..."}</span>
-              </div>
-              <div className="attack-buttons">
-                <button
-                  className="attack-button"
-                  style={{ background: "linear-gradient(135deg,#00daf3,#00a3ff)" }}
-                  onClick={() => {
-                    if (!nivelDesbloqueado(nivelActivo)) {
-                      setMensaje(`Completa el Nivel ${nivelActivo - 1} de defensa primero.`); return
-                    }
-                    simular()
-                  }}
-                >
-                  🛡 Iniciar Ejercicio Defensivo {ejActual}/5 — {NIVELES_DEFENSA[nivelActivo]?.nombre}
-                </button>
-                <button className="report-button" onClick={generarReporte}>
-                  Generar reporte
-                </button>
-              </div>
-            </section>
-
-            {/* ── Escenario activo ── */}
-            <section className="mission-panel">
-              <div className="panel-header">
-                <h2 style={{ margin: 0 }}>🛡 Escenario defensivo activo</h2>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <span className="tag" style={{
-                    background: estadoEsc === "resuelto" ? "rgba(0,218,243,0.10)" : "rgba(0,163,255,0.10)",
-                    color: estadoEsc === "resuelto" ? "var(--terciario-dim)" : "var(--primario-dim)",
-                    border: `1px solid ${estadoEsc === "resuelto" ? "rgba(0,218,243,0.25)" : "rgba(0,163,255,0.25)"}`,
-                    padding: "3px 10px", borderRadius: 4, fontSize: 11, fontWeight: 700, fontFamily: "var(--mono)"
-                  }}>
-                    {estadoEsc === "resuelto" ? "✅ MITIGADO" : "🔴 INCIDENTE ACTIVO"}
-                  </span>
-                  <span style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 700, color: cTimer }}>
-                    {fmt(tiempoRest)}
-                  </span>
-                  {escenario && estadoEsc !== "resuelto" && (
-                    <button className="boton-ayuda" onClick={pedirAyuda} disabled={cargandoAyuda}>
-                      {cargandoAyuda ? "..." : ayudas > 0 ? `💡 Ayuda (${ayudas}x)` : "💡 Pedir ayuda"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {mostrarHint && hint && (
-                <div className="hint-box">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <strong style={{ color: "#fbbf24", fontSize: 12 }}>
-                      💡 Pista #{ayudas} — -{Math.min(ayudas * 5, 30)}% penalización
-                    </strong>
-                    <button onClick={() => setMostrarHint(false)} style={{ background: "none", border: "none", color: "var(--texto-apagado)", cursor: "pointer", fontSize: 16 }}>✕</button>
+            {/* ── EJERCICIO DOCENTE ACTIVO ── */}
+            {modoDocente && ejDocenteActivo && (
+              <div className="exercise-card" style={{ borderColor:"rgba(48,209,88,0.35)" }}>
+                {/* Header con título + timer */}
+                <div className="exercise-header">
+                  <div style={{ flex:1 }}>
+                    <div className="exercise-title" style={{ color:"#30d158" }}>{ejDocenteActivo.titulo}</div>
+                    <div className="exercise-meta">
+                      🛡 Defensa SOC · Paso {Object.values(checklistManual).filter(Boolean).length} de {ejDocenteActivo.items.length} · {ejDocenteActivo.tiempo_minutos} min
+                    </div>
                   </div>
-                  <p>{hint}</p>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    {ayudasDocente > 0 && (
+                      <span style={{ fontFamily:"var(--mono)", fontSize:12, color:"#f59e0b" }}>
+                        💡 {ayudasDocente} pista{ayudasDocente>1?"s":""}
+                      </span>
+                    )}
+                    <div className={`timer-badge${timerDocente<=60?" danger":timerDocente<=120?" warning":""}`}
+                      style={timerDocente>120?{ borderColor:"rgba(48,209,88,0.30)", color:"#30d158" }:{}}>
+                      ⏱ {fmt(timerDocente)}
+                    </div>
+                  </div>
                 </div>
-              )}
 
-              <pre className="mission-text">{textoEsc}</pre>
+                {/* Escenario / contexto generado — visible completo */}
+                <pre className="mission-text" style={{ margin:"16px 24px 0" }}>
+                  {ejDocenteActivo.contexto_generado || ejDocenteActivo.descripcion}
+                </pre>
 
-              <div className="progress-wrapper">
-                <div className="progress-top">
-                  <span style={{ color: "var(--texto-secundario)" }}>Progreso del ejercicio defensivo</span>
-                  <strong style={{ color: pct === 100 ? "var(--terciario-dim)" : "var(--primario-dim)" }}>{pct}%</strong>
-                </div>
-                <div className="progress-bar">
+                {/* Barra de progreso */}
+                <div className="progress-bar" style={{ margin:"16px 24px 0" }}>
                   <div className="progress-fill" style={{
-                    width: `${pct}%`,
-                    background: pct === 100 ? "var(--terciario)" : "linear-gradient(90deg,#00daf3,#00a3ff)"
-                  }} />
+                    width:`${pctDocente}%`,
+                    background: pctDocente===100 ? "#30d158" : "linear-gradient(90deg,#30d158,#00b4d8)"
+                  }}/>
+                </div>
+                <div style={{ display:"flex", justifyContent:"space-between", margin:"4px 24px 0", fontSize:11, fontFamily:"var(--mono)", color:"var(--texto-apagado)" }}>
+                  <span>Progreso defensivo</span>
+                  <span style={{ color: pctDocente===100?"#30d158":"var(--texto-apagado)" }}>{pctDocente}%</span>
+                </div>
+
+                {/* Checklist de pasos — grid horizontal */}
+                <div style={{
+                  display:"grid",
+                  gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",
+                  gap:10, margin:"16px 24px 0"
+                }}>
+                  {ejDocenteActivo.items.map((it, idx) => {
+                    const done = checklistManual[it.id]
+                    const bajoAtaque = faseAtaqueDisparada.includes(idx) && !done
+                    return (
+                      <div key={it.id} style={{
+                        display:"flex", flexDirection:"column", gap:8,
+                        padding:"12px 14px", borderRadius:12,
+                        border: done
+                          ? "1px solid rgba(48,209,88,0.35)"
+                          : bajoAtaque
+                            ? "1px solid rgba(255,69,58,0.40)"
+                            : "1px solid rgba(255,255,255,0.08)",
+                        background: done
+                          ? "rgba(48,209,88,0.08)"
+                          : bajoAtaque
+                            ? "rgba(255,69,58,0.07)"
+                            : "rgba(255,255,255,0.03)",
+                        transition:"all 0.3s",
+                      }}>
+                        {/* Número + estado */}
+                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <div style={{
+                            width:26, height:26, borderRadius:"50%", flexShrink:0,
+                            display:"grid", placeItems:"center",
+                            fontSize:12, fontWeight:800, fontFamily:"var(--mono)",
+                            background: done
+                              ? "rgba(48,209,88,0.20)"
+                              : bajoAtaque
+                                ? "rgba(255,69,58,0.20)"
+                                : "rgba(255,255,255,0.06)",
+                            border: done
+                              ? "1.5px solid rgba(48,209,88,0.50)"
+                              : bajoAtaque
+                                ? "1.5px solid rgba(255,69,58,0.50)"
+                                : "1.5px solid rgba(255,255,255,0.12)",
+                            color: done ? "#30d158" : bajoAtaque ? "#ff453a" : "var(--texto-apagado)",
+                          }}>
+                            {done ? "✓" : bajoAtaque ? "!" : idx + 1}
+                          </div>
+                          {bajoAtaque && (
+                            <span style={{ fontSize:9, fontWeight:800, fontFamily:"var(--mono)", color:"#ff453a", letterSpacing:"0.05em", textTransform:"uppercase" }}>
+                              ⚠ Bajo ataque
+                            </span>
+                          )}
+                          {done && (
+                            <span style={{ fontSize:9, fontWeight:800, fontFamily:"var(--mono)", color:"#30d158", letterSpacing:"0.05em", textTransform:"uppercase" }}>
+                              ✅ Neutralizado
+                            </span>
+                          )}
+                        </div>
+                        {/* Descripción */}
+                        <span style={{
+                          fontSize:12, lineHeight:1.5,
+                          color: done ? "#30d158" : bajoAtaque ? "#ffb4ab" : "var(--texto-secundario)",
+                          fontWeight: bajoAtaque ? 600 : 400,
+                        }}>
+                          {it.descripcion}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Acciones */}
+                <div className="exercise-actions">
+                  {pctDocente < 100 && (
+                    <button onClick={pedirPistaDocente} disabled={cargandoPista} className="boton-ayuda">
+                      {cargandoPista ? "Analizando..." : "💡 Pedir pista"}
+                    </button>
+                  )}
+                  {pctDocente === 100 && (
+                    <div style={{ padding:"8px 16px", background:"rgba(48,209,88,0.12)", border:"1px solid rgba(48,209,88,0.28)", borderRadius:980, color:"#30d158", fontWeight:700, fontSize:14 }}>
+                      ✅ Todos los ataques neutralizados{ayudasDocente>0?` · ${ayudasDocente} pista${ayudasDocente>1?"s":""} usada${ayudasDocente>1?"s":""}` : ""}
+                    </div>
+                  )}
+                  {mostrarPista && pistaDocente && (
+                    <div className="hint-box" style={{ flex:1 }}>
+                      <p style={{ margin:0 }}>{pistaDocente}</p>
+                      <button onClick={() => setMostrarPista(false)} style={{ background:"none", border:"none", color:"#f59e0b", cursor:"pointer", fontSize:12, marginTop:4 }}>✕ Cerrar</button>
+                    </div>
+                  )}
                 </div>
               </div>
+            )}
 
-              <div className="mission-progress" style={{
-                gridTemplateColumns: `repeat(${Math.min(Object.keys(checklist).length, 4)}, 1fr)`
-              }}>
-                {Object.entries(checklist).map(([k, v]) => (
-                  <div key={k} className={`mission-step ${v ? "done" : ""}`}>
-                    {v ? "✓" : "○"} {DESC_PASO(k)}
-                  </div>
-                ))}
+            {/* Estado vacío — sin ejercicios */}
+            {ejerciciosDocente.length === 0 && (
+              <div className="card-mock" style={{ padding:"44px 24px", textAlign:"center" }}>
+                <div style={{ fontSize:40, marginBottom:14 }}>🛡</div>
+                <div style={{ fontSize:16, fontWeight:700, color:"#aeaeb2", marginBottom:8 }}>
+                  No hay ejercicios disponibles
+                </div>
+                <div style={{ fontSize:14, color:"#8e8e93" }}>
+                  El docente aún no ha publicado ejercicios de defensa. Vuelve más tarde.
+                </div>
               </div>
-            </section>
+            )}
 
-            {/* ── Terminal SOC ── */}
-            <section className="terminal-panel">
-              <div className="panel-header">
-                <h2 style={{ margin: 0 }}>Terminal SOC — Defensa</h2>
-                <span className="tag cyan-tag">SOC MODE</span>
+            {/* ── TERMINAL SOC — mismo estilo que ataque, acento verde ── */}
+            <section style={{ background:"#0d1117", border:"1px solid rgba(48,209,88,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)" }}>
+              <div style={{ background:"#161b22", padding:"11px 16px", display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
+                <div style={{ display:"flex", gap:6 }}>
+                  <div style={{ width:12, height:12, borderRadius:"50%", background:"#ff5f57" }}/>
+                  <div style={{ width:12, height:12, borderRadius:"50%", background:"#febc2e" }}/>
+                  <div style={{ width:12, height:12, borderRadius:"50%", background:"#28c840" }}/>
+                </div>
+                <div style={{ flex:1, textAlign:"center", fontFamily:"var(--mono)", fontSize:12, color:"rgba(255,255,255,0.40)" }}>
+                  CyberLab Terminal SOC — Modo Defensa
+                </div>
+                <div style={{ fontFamily:"var(--mono)", fontSize:11, color:"#30d158", background:"rgba(48,209,88,0.12)", padding:"3px 8px", borderRadius:6, border:"1px solid rgba(48,209,88,0.25)" }}>
+                  ● SOC LIVE
+                </div>
               </div>
-              <div className="terminal-window" ref={termRef}>
+              <div className="terminal-window" ref={termRef} style={{ borderRadius:0, borderLeft:"none", borderRight:"none", borderTop:"none" }}>
                 {historial.map((l, i) => (
-                  <div key={i} className={`terminal-line ${l.startsWith("soc@cyberlab") ? "terminal-cmd" : ""}`}>
-                    {l}
-                  </div>
+                  <div key={i} className={`terminal-line ${l.startsWith("soc@cyberlab") ? "terminal-cmd" : ""}`}>{l}</div>
                 ))}
               </div>
-              <form onSubmit={ejecutarComando} className="terminal-form">
-                <span className="terminal-prefix" style={{ color: "var(--terciario)" }}>soc@cyberlab:~$</span>
-                <input
-                  className="terminal-input"
-                  value={comando}
-                  onChange={e => setComando(e.target.value)}
-                  placeholder="Escribe un comando defensivo..."
-                  autoComplete="off"
-                  spellCheck={false}
-                />
+              <form onSubmit={ejecutarComando} className="terminal-form" style={{ margin:0, borderRadius:"0 0 18px 18px", borderLeft:"none", borderRight:"none", borderBottom:"none", borderTop:"1px solid rgba(48,209,88,0.14)" }}>
+                <span className="terminal-prefix" style={{ color:"#30d158" }}>soc@cyberlab:~$</span>
+                <input className="terminal-input" value={comando} onChange={e => setComando(e.target.value)}
+                  placeholder="Escribe un comando defensivo..." autoComplete="off" spellCheck={false}
+                  style={{ color:"#c9d1d9", caretColor:"#30d158" }}/>
               </form>
             </section>
 
-            {/* ── Stats ── */}
-            <section className="panel">
-              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
-                <div style={{ display: "flex", gap: 14 }}>
-                  {[
-                    { label: "EVENTOS", valor: stats.total_eventos, color: "var(--primario-dim)" },
-                    { label: "ALERTAS", valor: stats.total_alertas, color: "#ffb4ab" },
-                  ].map(s => (
-                    <div key={s.label} style={{ textAlign: "center", padding: "10px 20px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12 }}>
-                      <div style={{ fontSize: 28, fontWeight: 900, color: s.color }}>{s.valor}</div>
-                      <div style={{ fontSize: 11, color: "var(--texto-apagado)", fontFamily: "var(--mono)" }}>{s.label}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ fontSize: 12, color: "var(--texto-apagado)" }}>
-                  Usa <code style={{ background: "rgba(0,218,243,0.10)", color: "var(--terciario-dim)", padding: "2px 6px", borderRadius: 4, fontFamily: "var(--mono)" }}>eventos</code> y{" "}
-                  <code style={{ background: "rgba(0,218,243,0.10)", color: "var(--terciario-dim)", padding: "2px 6px", borderRadius: 4, fontFamily: "var(--mono)" }}>alertas</code> para iniciar el análisis.
+
+            {/* ── Popup fin de ejercicio docente ── */}
+            {popupFin && (
+              <div className="modal-fondo" onClick={() => setPopupFin(false)}>
+                <div className="modal-tarjeta" style={{ maxWidth:480, textAlign:"center" }} onClick={e => e.stopPropagation()}>
+                  <div style={{ fontSize:52, marginBottom:12 }}>{popupGano ? "🛡" : "💀"}</div>
+                  <h2 style={{
+                    margin:"0 0 8px", fontSize:24, fontWeight:900,
+                    color: popupGano ? "#30d158" : "#ff453a"
+                  }}>
+                    {popupGano ? "¡Ataque neutralizado!" : "El atacante ganó"}
+                  </h2>
+                  <p style={{ margin:"0 0 20px", fontSize:14, color:"#8e8e93", lineHeight:1.6 }}>
+                    {popupGano
+                      ? `Completaste el ejercicio al 100%. Todos los vectores de ataque fueron detenidos.`
+                      : `Tiempo agotado. Progreso alcanzado: ${popupFinPct}%. El atacante logró su objetivo.`}
+                  </p>
+
+                  {/* Barra de progreso */}
+                  <div style={{ background:"rgba(255,255,255,0.06)", borderRadius:999, height:10, margin:"0 0 20px", overflow:"hidden" }}>
+                    <div style={{
+                      height:"100%", borderRadius:999,
+                      width:`${popupFinPct}%`,
+                      background: popupGano ? "#30d158" : popupFinPct >= 50 ? "#f59e0b" : "#ff453a",
+                      transition:"width 0.6s ease",
+                    }}/>
+                  </div>
+                  <div style={{ fontSize:32, fontWeight:900, fontFamily:"var(--mono)", color: popupGano ? "#30d158" : "#ff453a", marginBottom:20 }}>
+                    {popupFinPct}%
+                  </div>
+
+                  <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+                    <button
+                      className="boton-principal"
+                      style={{ background: popupGano ? "#30d158" : undefined, color: popupGano ? "#000" : undefined }}
+                      onClick={() => { setPopupFin(false); setEjDocenteActivo(null) }}
+                    >
+                      {popupGano ? "Continuar →" : "Reintentar"}
+                    </button>
+                    <button className="boton-secundario" onClick={() => setPopupFin(false)}>
+                      Ver terminal
+                    </button>
+                  </div>
                 </div>
               </div>
-            </section>
+            )}
+
+            {/* ── Modal confirmación ejercicio docente ── */}
+            {confirmEjDocente && (
+              <div className="modal-fondo" onClick={() => setConfirmEjDocente(null)}>
+                <div className="modal-tarjeta" style={{ maxWidth:480 }} onClick={e => e.stopPropagation()}>
+                  <div className="modal-cabecera">
+                    <h3 className="modal-titulo">🛡 ¿Iniciar ejercicio?</h3>
+                    <button className="boton-secundario" onClick={() => setConfirmEjDocente(null)}>✕</button>
+                  </div>
+                  <div className="modal-cuerpo" style={{ display:"grid", gap:16 }}>
+                    {/* Info del ejercicio */}
+                    <div style={{ background:"rgba(48,209,88,0.06)", border:"1px solid rgba(48,209,88,0.22)", borderRadius:14, padding:"18px 20px" }}>
+                      <div style={{ fontSize:11, fontFamily:"var(--mono)", color:"#30d158", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:8 }}>
+                        Ejercicio SOC — Blue Team
+                      </div>
+                      <div style={{ fontSize:18, fontWeight:800, color:"#f5f5f7", letterSpacing:"-0.3px", marginBottom:6 }}>
+                        {confirmEjDocente.titulo}
+                      </div>
+                      <div style={{ fontSize:13, color:"#8e8e93", lineHeight:1.5 }}>
+                        {confirmEjDocente.descripcion}
+                      </div>
+                    </div>
+                    {/* Meta chips */}
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 }}>
+                      {[
+                        { l:"Modo",   v:"🛡 Defensa SOC" },
+                        { l:"Nivel",  v:`Nivel ${confirmEjDocente.nivel || 1}` },
+                        { l:"Tiempo", v:`${confirmEjDocente.tiempo_minutos} min` },
+                      ].map(({ l, v }) => (
+                        <div key={l} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:10, padding:"11px 14px" }}>
+                          <div style={{ fontSize:10, fontFamily:"var(--mono)", color:"#6e6e73", letterSpacing:"0.06em", marginBottom:4 }}>{l}</div>
+                          <div style={{ fontSize:14, fontWeight:700, color:"#f5f5f7" }}>{v}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <p style={{ margin:0, fontSize:13, color:"#8e8e93", lineHeight:1.6, background:"rgba(255,159,10,0.06)", border:"1px solid rgba(255,159,10,0.18)", borderRadius:10, padding:"10px 14px" }}>
+                      ⚠ Una vez que confirmes, el temporizador comenzará inmediatamente. Asegúrate de estar listo.
+                    </p>
+                    <div style={{ display:"flex", gap:10 }}>
+                      <button
+                        style={{ flex:1, padding:"14px 20px", fontSize:15, fontWeight:800, borderRadius:980, background:"#30d158", color:"#000", border:"none", cursor:"pointer", letterSpacing:"-0.2px" }}
+                        onClick={() => { iniciarEjDocente(confirmEjDocente); setConfirmEjDocente(null) }}
+                      >
+                        Sí, iniciar →
+                      </button>
+                      <button
+                        className="btn-mock-outline"
+                        style={{ flex:1, padding:"14px 20px", fontSize:15 }}
+                        onClick={() => setConfirmEjDocente(null)}
+                      >
+                        No, cancelar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* ── Modal reporte ── */}
             {modalReporte && reporte && (

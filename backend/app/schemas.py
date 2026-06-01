@@ -4,12 +4,13 @@ from datetime import datetime
 
 
 class SolicitudInicioSesion(BaseModel):
-    nombre_usuario: str
+    correo: str
     contrasena: str
 
 
 class SolicitudRegistroEstudiante(BaseModel):
-    nombre_usuario: str
+    nombre: str
+    correo: str
     contrasena: str
 
 
@@ -21,8 +22,8 @@ class SolicitudFeedbackIA(BaseModel):
 
 
 class SolicitudCrearUsuario(BaseModel):
-    nombre_usuario_admin: str
-    nombre_usuario: str
+    nombre: str
+    correo: str
     contrasena: str
     rol: str
 
@@ -168,6 +169,8 @@ class EstructuraSalida(BaseModel):
 class RespuestaUsuario(BaseModel):
     id: int
     nombre_usuario: str
+    nombre: Optional[str] = None
+    correo: Optional[str] = None
     rol: str
     fecha_creacion: datetime
 
@@ -183,3 +186,92 @@ class SolicitudTerminalDefensa(BaseModel):
 class SolicitudCambiarRol(BaseModel):
     nombre_usuario: str
     nuevo_rol: str
+
+
+class SolicitudEliminarUsuario(BaseModel):
+    nombre_usuario: str
+    nombre_usuario_admin: str
+
+
+# ============================
+# EJERCICIOS DOCENTE
+# ============================
+
+class ItemEjercicioDocenteEntrada(BaseModel):
+    descripcion: str
+    orden: int = 0
+
+
+class SolicitudCrearEjercicioDocente(BaseModel):
+    titulo: str
+    descripcion: str
+    instrucciones: Optional[str] = None
+    tipo: str = "ataque"
+    nivel: int = 1
+    tiempo_minutos: int = 10
+    items: List[ItemEjercicioDocenteEntrada] = []
+
+
+class SolicitudIaAsistir(BaseModel):
+    titulo: str
+    tipo: str = "ataque"
+    nivel: int = 1
+    num_puntos: int = 4
+
+
+class ItemEjercicioDocenteSalida(BaseModel):
+    id: int
+    descripcion: str
+    orden: int
+
+    class Config:
+        from_attributes = True
+
+
+class EjercicioDocenteSalida(BaseModel):
+    id: int
+    titulo: str
+    descripcion: str
+    instrucciones: Optional[str] = None
+    activo: bool
+    creado_por: str
+    fecha_creacion: datetime
+    items: List[ItemEjercicioDocenteSalida] = []
+
+    class Config:
+        from_attributes = True
+
+
+class SolicitudEntregarEjercicio(BaseModel):
+    respuesta: Optional[str] = None
+    ayudas_pedidas: int = 0
+
+
+class SolicitudEvaluarEntrega(BaseModel):
+    nota: float
+    comentarios: Optional[str] = None
+
+
+class EntregaSalida(BaseModel):
+    id: int
+    ejercicio_id: int
+    usuario: str
+    respuesta: Optional[str] = None
+    estado: str
+    nota: Optional[float] = None
+    comentarios_docente: Optional[str] = None
+    fecha_entrega: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ── Recuperación de contraseña ────────────────────────────────────
+
+class SolicitudRecuperarContrasena(BaseModel):
+    correo: str
+
+
+class SolicitudResetContrasena(BaseModel):
+    token: str
+    nueva_contrasena: str

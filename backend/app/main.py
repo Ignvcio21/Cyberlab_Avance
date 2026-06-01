@@ -24,7 +24,8 @@ from .models import (
     Curso, Capitulo, Leccion, Ejercicio, ProgresoUsuario,
     IntentoEjercicio, EvaluacionDocente,
     PlantillaEscenario, VariablePlantilla, EscenarioInstancia, VariableInstancia,
-    EscenarioActivoUsuario, BloqueoEscenario
+    EscenarioActivoUsuario, BloqueoEscenario,
+    EjercicioDocente, ItemEjercicioDocente, EntregaEjercicioDocente,
 )
 from .schemas import (
     SolicitudInicioSesion, SolicitudRegistroEstudiante, SolicitudFeedbackIA,
@@ -37,7 +38,14 @@ from .schemas import (
     EstructuraSalida, RespuestaUsuario,
     SolicitudTerminal, RespuestaTerminal,
     SolicitudTerminalDefensa,
-    SolicitudCambiarRol,
+    SolicitudCambiarRol, SolicitudEliminarUsuario,
+    SolicitudCrearEjercicioDocente, EjercicioDocenteSalida,
+    SolicitudEntregarEjercicio, SolicitudEvaluarEntrega, EntregaSalida,
+    SolicitudIaAsistir,
+    SolicitudRecuperarContrasena, SolicitudResetContrasena,
+)
+from .email_utils import (
+    correo_nuevo_ejercicio, correo_nota_asignada, correo_recuperar_contrasena,
 )
 from .auth import (
     hashear_contrasena, verificar_contrasena,
@@ -353,18 +361,64 @@ def seed_plantillas(bd: Session):
 
 @app.on_event("startup")
 def iniciar_sistema():
+    # Migración SQLite: añadir columnas nuevas si no existen
+    with engine.connect() as con:
+        columnas = [row[1] for row in con.execute(text("PRAGMA table_info(usuarios)"))]
+        if "nombre" not in columnas:
+            con.execute(text("ALTER TABLE usuarios ADD COLUMN nombre TEXT"))
+            con.commit()
+        if "correo" not in columnas:
+            con.execute(text("ALTER TABLE usuarios ADD COLUMN correo TEXT"))
+            con.commit()
+        try:
+            con.execute(text("CREATE UNIQUE INDEX ix_usuarios_correo ON usuarios(correo) WHERE correo IS NOT NULL"))
+            con.commit()
+        except Exception:
+            pass
+        if "token_reset" not in columnas:
+            con.execute(text("ALTER TABLE usuarios ADD COLUMN token_reset TEXT"))
+            con.commit()
+        if "token_reset_expira" not in columnas:
+            con.execute(text("ALTER TABLE usuarios ADD COLUMN token_reset_expira TIMESTAMP"))
+            con.commit()
+
     bd = SesionLocal()
-    # Admin por defecto
     admin = bd.query(Usuario).filter(Usuario.nombre_usuario == "admin").first()
     if not admin:
         bd.add(Usuario(
             nombre_usuario="admin",
+            nombre="Administrador",
+            correo="admin@gmail.com",
             contrasena=hashear_contrasena("admin123"),
             rol="admin"
         ))
         bd.commit()
-    elif admin.rol != "admin":
-        admin.rol = "admin"; bd.commit()
+    else:
+        if admin.rol != "admin":
+            admin.rol = "admin"
+        if not admin.correo:
+            admin.correo = "admin@gmail.com"
+        if not admin.nombre:
+            admin.nombre = "Administrador"
+        bd.commit()
+    # Limpiar entregas duplicadas (conservar la más reciente por ejercicio+usuario)
+    try:
+        duplicados = bd.execute(text("""
+            DELETE FROM entregas_ejercicio_docente
+            WHERE id NOT IN (
+                SELECT MAX(id) FROM entregas_ejercicio_docente
+                GROUP BY ejercicio_id, usuario_id
+            )
+        """))
+        bd.commit()
+    except Exception:
+        bd.rollback()
+    # Crear índice único si no existe
+    try:
+        bd.execute(text("CREATE UNIQUE INDEX uq_entrega_ejercicio_usuario ON entregas_ejercicio_docente(ejercicio_id, usuario_id)"))
+        bd.commit()
+    except Exception:
+        pass
     sembrar_contenido_si_falta(bd)
     seed_plantillas(bd)
     bd.close()
@@ -390,20 +444,23 @@ def health():
 @app.post("/iniciar-sesion")
 @limiter.limit("10/minute")
 def iniciar_sesion(request: Request, datos: SolicitudInicioSesion, bd: Session = Depends(obtener_bd)):
-    u = bd.query(Usuario).filter(Usuario.nombre_usuario == datos.nombre_usuario).first()
+    u = bd.query(Usuario).filter(Usuario.correo == datos.correo).first()
     if not u or not verificar_contrasena(datos.contrasena, u.contrasena):
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
     token = crear_token({"sub": u.nombre_usuario, "rol": u.rol})
-    return {"mensaje": "Inicio de sesión correcto", "nombre_usuario": u.nombre_usuario, "rol": u.rol, "token": token}
+    return {"mensaje": "Inicio de sesión correcto", "nombre_usuario": u.nombre_usuario, "nombre": u.nombre, "rol": u.rol, "token": token}
 
 
 @app.post("/registrar")
 @limiter.limit("5/minute")
 def registrar_estudiante(request: Request, datos: SolicitudRegistroEstudiante, bd: Session = Depends(obtener_bd)):
-    if bd.query(Usuario).filter(Usuario.nombre_usuario == datos.nombre_usuario).first():
-        raise HTTPException(status_code=400, detail="El usuario ya existe")
+    correo = datos.correo.strip().lower()
+    if bd.query(Usuario).filter(Usuario.correo == correo).first():
+        raise HTTPException(status_code=400, detail="El correo ya está registrado")
     bd.add(Usuario(
-        nombre_usuario=datos.nombre_usuario,
+        nombre_usuario=correo,
+        nombre=datos.nombre.strip(),
+        correo=correo,
         contrasena=hashear_contrasena(datos.contrasena),
         rol="estudiante"
     ))
@@ -418,9 +475,10 @@ def admin_crear_usuario(datos: SolicitudCrearUsuario, usuario_actual: Usuario = 
     rol = (datos.rol or "").strip().lower()
     if rol not in ["estudiante", "docente"]:
         raise HTTPException(status_code=400, detail="Rol inválido")
-    if obtener_usuario_por_nombre(bd, datos.nombre_usuario):
-        raise HTTPException(status_code=400, detail="El usuario ya existe")
-    bd.add(Usuario(nombre_usuario=datos.nombre_usuario, contrasena=hashear_contrasena(datos.contrasena), rol=rol))
+    correo = datos.correo.strip().lower()
+    if bd.query(Usuario).filter(Usuario.correo == correo).first():
+        raise HTTPException(status_code=400, detail="El correo ya está registrado")
+    bd.add(Usuario(nombre_usuario=correo, nombre=datos.nombre.strip(), correo=correo, contrasena=hashear_contrasena(datos.contrasena), rol=rol))
     bd.commit()
     return {"mensaje": f"Usuario creado ({rol})"}
 
@@ -441,6 +499,59 @@ def admin_cambiar_rol(datos: SolicitudCambiarRol, usuario_actual: Usuario = Depe
     u.rol = rol
     bd.commit()
     return {"mensaje": f"Rol de '{datos.nombre_usuario}' cambiado a '{rol}'"}
+
+
+@app.delete("/admin/eliminar-usuario")
+def admin_eliminar_usuario(
+    datos: SolicitudEliminarUsuario,
+    usuario_actual: Usuario = Depends(solo_admin),
+    bd: Session = Depends(obtener_bd)
+):
+    # Protecciones básicas
+    if datos.nombre_usuario == "admin":
+        raise HTTPException(status_code=400, detail="No se puede eliminar al administrador principal")
+    if datos.nombre_usuario == usuario_actual.nombre_usuario:
+        raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
+
+    u = obtener_usuario_por_nombre(bd, datos.nombre_usuario)
+    if not u:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    uid = u.id
+
+    # 1. Nullificar FKs opcionales que apuntan al usuario
+    bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == uid).update({"usuario_id": None})
+    bd.query(Curso).filter(Curso.creado_por_usuario_id == uid).update({"creado_por_usuario_id": None})
+
+    # 2. Eliminar evaluaciones donde este usuario es docente
+    bd.query(EvaluacionDocente).filter(EvaluacionDocente.docente_id == uid).delete()
+
+    # 3. Eliminar evaluaciones ligadas a sus intentos
+    for it in bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == uid).all():
+        bd.query(EvaluacionDocente).filter(EvaluacionDocente.intento_id == it.id).delete()
+
+    # 4. Eliminar intentos
+    bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == uid).delete()
+
+    # 5. Eliminar progreso de lecciones
+    bd.query(ProgresoUsuario).filter(ProgresoUsuario.usuario_id == uid).delete()
+
+    # 6. Eliminar escenario activo
+    bd.query(EscenarioActivoUsuario).filter(EscenarioActivoUsuario.usuario_id == uid).delete()
+
+    # 7. Eliminar variables de instancias y luego instancias
+    for inst in bd.query(EscenarioInstancia).filter(EscenarioInstancia.usuario_id == uid).all():
+        bd.query(VariableInstancia).filter(VariableInstancia.instancia_id == inst.id).delete()
+    bd.query(EscenarioInstancia).filter(EscenarioInstancia.usuario_id == uid).delete()
+
+    # 8. Eliminar entregas de ejercicios docente
+    bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == uid).delete()
+
+    # 9. Eliminar el usuario
+    bd.delete(u)
+    bd.commit()
+
+    return {"mensaje": f"Usuario '{datos.nombre_usuario}' eliminado correctamente"}
 
 
 @app.post("/admin/curso")
@@ -528,28 +639,33 @@ def obtener_progreso_usuario(nombre_usuario: str, usuario_actual: Usuario = Depe
 
 
 @app.get("/progreso/laboratorio/{nombre_usuario}")
-def obtener_niveles_desbloqueados(nombre_usuario: str, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+def obtener_niveles_desbloqueados(
+    nombre_usuario: str,
+    tipo: str | None = None,   # "ataque" | "defensa" | None (todos)
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd)
+):
     if usuario_actual.nombre_usuario != nombre_usuario and usuario_actual.rol not in ["admin", "docente"]:
         raise HTTPException(status_code=403, detail="No autorizado")
     u = bd.query(Usuario).filter(Usuario.nombre_usuario == nombre_usuario).first()
     if not u: raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     TOTAL_EJ = 5
-    intentos_aprobados = bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == u.id, IntentoEjercicio.estado == "aprobado").all()
-    cursos = bd.query(Curso).all()
-    mapa_ej_nivel = {}
-    for curso in cursos:
-        caps = bd.query(Capitulo).filter(Capitulo.curso_id == curso.id).all()
-        for cap in caps:
-            lecs = bd.query(Leccion).filter(Leccion.capitulo_id == cap.id).all()
-            for lec in lecs:
-                for ej in bd.query(Ejercicio).filter(Ejercicio.leccion_id == lec.id).all():
-                    mapa_ej_nivel[ej.id] = cap.orden
-
     conteo = {n: 0 for n in range(1, 8)}
-    for it in intentos_aprobados:
-        niv = mapa_ej_nivel.get(it.ejercicio_id)
-        if niv and 1 <= niv <= 7: conteo[niv] += 1
+
+    # Contar entregas de ejercicios docente por nivel, filtrado por tipo si se indica
+    entregas = bd.query(EntregaEjercicioDocente).filter(
+        EntregaEjercicioDocente.usuario_id == u.id,
+        EntregaEjercicioDocente.estado.in_(["entregado", "evaluado"])
+    ).all()
+    for en in entregas:
+        ej_doc = bd.query(EjercicioDocente).filter(EjercicioDocente.id == en.ejercicio_id).first()
+        if ej_doc:
+            if tipo and ej_doc.tipo != tipo:
+                continue
+            niv = ej_doc.nivel or 1
+            if 1 <= niv <= 7:
+                conteo[niv] += 1
 
     niveles_completados = [n for n, c in conteo.items() if c >= TOTAL_EJ]
     return {
@@ -594,6 +710,12 @@ def docente_listar_intentos(usuario_actual: Usuario = Depends(solo_docente), bd:
             "fecha_fin": it.fecha_fin.isoformat() if it.fecha_fin else None,
         })
     return {"intentos": salida}
+
+
+@app.get("/mis-entregas-docente")
+def mis_entregas_docente(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == usuario_actual.id).all()
+    return {"ejercicio_ids": [e.ejercicio_id for e in entregas]}
 
 
 @app.get("/mis-evaluaciones")
@@ -717,6 +839,25 @@ def obtener_reporte(usuario_actual: Usuario = Depends(obtener_usuario_actual), b
 
 # ── Terminal ataque ───────────────────────────────────────────────
 
+def _construir_contexto_real(bd: Session, usuario_id: int) -> str:
+    """Construye contexto con datos reales de la BD para enriquecer el prompt de IA."""
+    eventos = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(8).all()
+    alertas = bd.query(Alerta).order_by(Alerta.fecha_creacion.desc()).limit(5).all()
+    bloqueadas = bd.query(IpBloqueada).limit(5).all()
+    ips_activas = list(set(e.ip_origen for e in eventos))[:5]
+
+    ctx = "=== CONTEXTO DEL LABORATORIO (datos reales) ===\n"
+    ctx += f"IPs activas detectadas: {', '.join(ips_activas) if ips_activas else 'ninguna'}\n"
+    if alertas:
+        ctx += f"Alertas activas ({len(alertas)}): " + " | ".join(f"{a.severidad}:{a.titulo}" for a in alertas) + "\n"
+    if eventos:
+        ctx += f"Últimos eventos ({len(eventos)}): " + " | ".join(f"{e.tipo_evento} src={e.ip_origen}" for e in eventos) + "\n"
+    if bloqueadas:
+        ctx += f"IPs bloqueadas: {', '.join(ip.direccion_ip for ip in bloqueadas)}\n"
+    ctx += "=== FIN CONTEXTO ===\n"
+    return ctx
+
+
 @app.post("/terminal", response_model=RespuestaTerminal)
 @limiter.limit("60/minute")
 def ejecutar_terminal(request: Request, datos: SolicitudTerminal, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
@@ -742,22 +883,24 @@ def ejecutar_terminal(request: Request, datos: SolicitudTerminal, usuario_actual
     if base in ["help", "?", "man"]:
         guardar("OK")
         return {"salida": (
-            "CyberLab Terminal (kali-like)\n"
-            "Comandos: help, whoami, pwd, ls, ip a, status, history,\n"
-            "show alerts, show events, show blocked, show services,\n"
-            "show traffic, show banners, show vulnerabilities,\n"
-            "show users, show sessions, show failed logins,\n"
-            "show processes, show hosts, scan ports, resolve host,\n"
-            "trace ip, enumerate users, enumerate services,\n"
-            "export report, block ip <ip>, unblock ip <ip>, clear\n"
+            "CyberLab Terminal — Kali Linux (IA activa)\n"
+            "Puedes usar cualquier comando de Kali Linux.\n"
+            "Comandos con datos reales del laboratorio:\n"
+            "  show alerts, show events, show blocked, show traffic,\n"
+            "  show failed logins, show sessions, show hosts,\n"
+            "  resolve host, trace ip, status, history,\n"
+            "  block ip <ip>, unblock ip <ip>, export report\n"
+            "Cualquier otro comando Linux/Kali es procesado por IA.\n"
         )}
+
+    # ── Comandos con datos reales de BD ──────────────────────────
 
     if cmd_l == "whoami":
         guardar("OK"); return {"salida": usuario_actual.nombre_usuario}
     if cmd_l == "pwd":
-        guardar("OK"); return {"salida": "/home/cyberlab"}
-    if cmd_l in ["ls", "ls -la", "ls -l"]:
-        guardar("OK"); return {"salida": "drwxr-xr-x evidence/\ndrwxr-xr-x logs/\ndrwxr-xr-x reports/\n-rw-r--r-- README.txt\n-rw-r--r-- incident.log"}
+        guardar("OK"); return {"salida": "/home/kali"}
+    if cmd_l in ["ls", "ls -la", "ls -l", "ls -a"]:
+        guardar("OK"); return {"salida": "drwxr-xr-x  evidence/\ndrwxr-xr-x  logs/\ndrwxr-xr-x  reports/\n-rw-r--r--  README.txt\n-rw-r--r--  incident.log"}
 
     if cmd_l in ["ip a", "ip addr", "ifconfig"]:
         _, inst_activa = obtener_instancia_activa_usuario(bd, usuario_actual.id)
@@ -765,79 +908,114 @@ def ejecutar_terminal(request: Request, datos: SolicitudTerminal, usuario_actual
         if inst_activa:
             var_ip = bd.query(VariableInstancia).filter(VariableInstancia.instancia_id == inst_activa.id, VariableInstancia.clave == "ip_atacante").first()
             if var_ip: ip_atacante = var_ip.valor
-        salida = "1: lo: inet 127.0.0.1/8\n2: eth0: inet 192.168.1.10/24\n"
+        salida = "1: lo: <LOOPBACK,UP> mtu 65536\n   inet 127.0.0.1/8\n2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500\n   inet 192.168.1.10/24 brd 192.168.1.255"
         if ip_atacante:
-            salida += f"\n[IDS] Source IP flagged: {ip_atacante}\n"
+            salida += f"\n\n[IDS] Fuente marcada como sospechosa: {ip_atacante}"
         guardar("OK"); return {"salida": salida}
 
     if cmd_l == "history":
-        acciones = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == usuario_actual.id).order_by(AccionUsuario.fecha_creacion.desc()).limit(20).all()
-        if not acciones: return {"salida": "No hay historial."}
-        lineas = [f"  {i+1}  {a.comando}" for i, a in enumerate(reversed(acciones))]
+        acciones = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == usuario_actual.id).order_by(AccionUsuario.fecha_creacion.asc()).limit(20).all()
+        if not acciones: return {"salida": "No hay historial registrado."}
+        lineas = [f"  {i+1}  {a.comando}" for i, a in enumerate(acciones)]
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
     if cmd_l == "status":
         total_e = bd.query(Evento).count(); total_a = bd.query(Alerta).count()
         _, inst = obtener_instancia_activa_usuario(bd, usuario_actual.id)
         bloq = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id).count() if inst else 0
-        guardar("OK"); return {"salida": f"System status: OK\nevents: {total_e}\nalerts: {total_a}\nblocked_ips: {bloq}\nlab: operational"}
+        estado = "BAJO ATAQUE" if total_a >= 2 else "OPERATIVO"
+        guardar("OK"); return {"salida": f"● Sistema: {estado}\n  Eventos registrados : {total_e}\n  Alertas activas     : {total_a}\n  IPs bloqueadas      : {bloq}"}
 
     if cmd_l == "show alerts":
         alertas = bd.query(Alerta).order_by(Alerta.fecha_creacion.desc()).limit(10).all()
-        if not alertas: return {"salida": "No alerts registered."}
-        guardar("OK"); return {"salida": "\n".join([f"{a.fecha_creacion.isoformat() if a.fecha_creacion else 'N/A'} | {a.severidad} | {a.titulo} | {a.descripcion}" for a in alertas])}
+        if not alertas: return {"salida": "No hay alertas registradas."}
+        guardar("OK")
+        return {"salida": f"ALERTAS ({len(alertas)}):\n" + "\n".join(
+            f"[{a.fecha_creacion.strftime('%H:%M:%S') if a.fecha_creacion else 'N/A'}] [{a.severidad}] {a.titulo} — {a.descripcion[:60]}"
+            for a in alertas
+        )}
 
     if cmd_l == "show events":
-        eventos = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(10).all()
-        if not eventos: return {"salida": "No events registered."}
-        guardar("OK"); return {"salida": "\n".join([f"{e.fecha_creacion.isoformat() if e.fecha_creacion else 'N/A'} | {e.tipo_evento} | src={e.ip_origen} | {e.descripcion}" for e in eventos])}
+        eventos = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(12).all()
+        if not eventos: return {"salida": "No hay eventos registrados."}
+        guardar("OK")
+        return {"salida": f"EVENTOS ({bd.query(Evento).count()} total):\n" + "\n".join(
+            f"[{e.fecha_creacion.strftime('%H:%M:%S') if e.fecha_creacion else 'N/A'}] {e.tipo_evento:<22} src={e.ip_origen:<18} {e.descripcion[:50]}"
+            for e in eventos
+        )}
 
     if cmd_l == "show blocked":
         _, inst = obtener_instancia_activa_usuario(bd, usuario_actual.id)
-        if not inst: return {"salida": "No active scenario."}
+        if not inst: return {"salida": "Sin escenario activo."}
         ips = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id).all()
-        if not ips: return {"salida": "No blocked IPs in current scenario."}
-        guardar("OK"); return {"salida": "\n".join([f"{ip.fecha_creacion.isoformat() if ip.fecha_creacion else 'N/A'} | {ip.direccion_ip} | reason={ip.motivo}" for ip in ips])}
+        if not ips: return {"salida": "No hay IPs bloqueadas en este escenario."}
+        guardar("OK")
+        return {"salida": "IPs BLOQUEADAS:\n" + "\n".join(f"  DROP  {ip.direccion_ip}  # {ip.motivo}" for ip in ips)}
 
-    if cmd_l == "show services":
-        guardar("OK"); return {"salida": "SSH (22/tcp) OPEN\nHTTP (80/tcp) OPEN\nHTTPS (443/tcp) OPEN\nFTP (21/tcp) OPEN"}
-    if cmd_l == "scan ports":
-        guardar("OK"); return {"salida": "22/tcp open ssh\n80/tcp open http\n443/tcp open https\n8080/tcp open http-alt"}
     if cmd_l == "show traffic":
-        eventos = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(5).all()
-        guardar("OK"); return {"salida": f"Traffic analysis:\n" + "\n".join([f"src={e.ip_origen} type={e.tipo_evento}" for e in eventos])}
-    if cmd_l == "show banners":
-        guardar("OK"); return {"salida": "SSH: OpenSSH_7.4 (outdated)\nHTTP: Apache/2.2.34 (outdated)\nFTP: vsftpd 2.3.4 (VULNERABLE)"}
+        eventos = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(8).all()
+        if not eventos: return {"salida": "Sin tráfico registrado."}
+        guardar("OK")
+        return {"salida": "TRÁFICO DE RED:\n" + "\n".join(
+            f"  {e.ip_origen:<18} → {e.tipo_evento:<20} {e.descripcion[:45]}"
+            for e in eventos
+        )}
+
+    if cmd_l == "show failed logins":
+        evs = bd.query(Evento).filter(Evento.tipo_evento.ilike("%fuerza%")).order_by(Evento.fecha_creacion.desc()).limit(10).all()
+        if not evs: return {"salida": "No hay intentos de login fallidos registrados."}
+        guardar("OK")
+        return {"salida": f"FAILED LOGINS ({len(evs)}):\n" + "\n".join(
+            f"  [{e.fecha_creacion.strftime('%H:%M:%S') if e.fecha_creacion else 'N/A'}] FAILED src={e.ip_origen} {e.descripcion[:50]}"
+            for e in evs
+        )}
+
+    if cmd_l == "show sessions":
+        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(5).all()
+        if not evs: return {"salida": "Sin sesiones activas registradas."}
+        guardar("OK")
+        return {"salida": "SESIONES ACTIVAS:\n" + "\n".join(
+            f"  SESSION-{i+1:03d}  src={e.ip_origen:<18} estado=ACTIVA  {e.tipo_evento}"
+            for i, e in enumerate(evs)
+        )}
+
+    if cmd_l == "show hosts":
+        ips = list(set(e.ip_origen for e in bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(20).all()))
+        if not ips: return {"salida": "No se detectaron hosts activos."}
+        bloqueadas = {ip.direccion_ip for ip in bd.query(IpBloqueada).all()}
+        guardar("OK")
+        return {"salida": "HOSTS DETECTADOS:\n" + "\n".join(
+            f"  {ip:<18} {'[BLOQUEADA]' if ip in bloqueadas else '[ACTIVA]'}"
+            for ip in ips[:8]
+        )}
+
     if cmd_l == "resolve host":
         ev = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).first()
         ip_o = ev.ip_origen if ev else "192.168.1.100"
-        guardar("OK"); return {"salida": f"PTR: attacker-{ip_o.replace('.', '-')}.malicious.net\nReputation: MALICIOUS"}
-    if cmd_l == "show vulnerabilities":
-        guardar("OK"); return {"salida": "CRITICAL: vsftpd 2.3.4 backdoor (CVE-2011-2523)\nHIGH: OpenSSH 7.4 user enum (CVE-2018-15473)\nHIGH: Apache 2.2.34 (CVE-2017-7679)"}
+        guardar("OK")
+        return {"salida": f"PTR {ip_o}: attacker-{ip_o.replace('.', '-')}.malicious.net\nASN: AS666 (malicious-hosting)\nReputación: MALICIOSA — listada en 3 blocklists"}
+
     if cmd_l == "trace ip":
         ev = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).first()
         ip_o = ev.ip_origen if ev else "?"
-        guardar("OK"); return {"salida": f"1 192.168.1.1\n2 10.0.0.1\n3 {ip_o} TARGET"}
-    if cmd_l == "show users":
-        guardar("OK"); return {"salida": "root uid=0\nadmin uid=1000\noperador uid=1001\nsysadmin uid=1003"}
-    if cmd_l == "show sessions":
-        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(3).all()
-        guardar("OK"); return {"salida": "\n".join([f"SESSION-{i+1:03d} src={e.ip_origen} ACTIVE" for i, e in enumerate(evs)])}
-    if cmd_l == "show failed logins":
-        evs = bd.query(Evento).filter(Evento.tipo_evento == "Fuerza Bruta").order_by(Evento.fecha_creacion.desc()).limit(10).all()
-        if not evs: return {"salida": "No failed login attempts."}
-        guardar("OK"); return {"salida": "\n".join([f"FAILED LOGIN src={e.ip_origen} {e.descripcion}" for e in evs])}
-    if cmd_l == "show processes":
-        guardar("OK"); return {"salida": "PID 215 sshd\nPID 318 apache2\nPID 891 /bin/bash (ANOMALOUS)\nPID 934 nc -lvp 4444 (SUSPICIOUS)"}
-    if cmd_l == "show hosts":
-        ips = list(set(e.ip_origen for e in bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(20).all()))[:6]
-        guardar("OK"); return {"salida": "\n".join([f"{ip} ACTIVE — malicious" for ip in ips])}
-    if cmd_l == "enumerate users":
-        guardar("OK"); return {"salida": "[+] admin VALID\n[+] root VALID\n[-] guest INVALID"}
-    if cmd_l == "enumerate services":
-        guardar("OK"); return {"salida": "SSH 22/tcp OpenSSH 7.4\nHTTP 80/tcp Apache 2.2.34\nFTP 21/tcp vsftpd 2.3.4 BACKDOOR"}
+        guardar("OK")
+        return {"salida": f"traceroute to {ip_o}:\n  1  192.168.1.1   1.2 ms\n  2  10.0.0.1      8.4 ms\n  3  {ip_o}   42.1 ms  TARGET"}
+
     if cmd_l == "export report":
-        guardar("OK"); return {"salida": f"Report exported: /home/cyberlab/reports/incident_{usuario_actual.nombre_usuario}.txt"}
+        total_e = bd.query(Evento).count(); total_a = bd.query(Alerta).count()
+        bloq = bd.query(IpBloqueada).count()
+        acciones = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == usuario_actual.id).count()
+        ruta = f"/home/kali/reports/incident_{usuario_actual.nombre_usuario}.txt"
+        guardar("OK")
+        return {"salida": (
+            f"[+] Generando reporte de incidente...\n"
+            f"    Analista  : {usuario_actual.nombre_usuario}\n"
+            f"    Eventos   : {total_e}\n"
+            f"    Alertas   : {total_a}\n"
+            f"    Bloqueadas: {bloq} IPs\n"
+            f"    Comandos  : {acciones} registrados\n"
+            f"[+] Reporte exportado → {ruta}"
+        )}
 
     if base == "block" and len(partes) >= 3 and partes[1] == "ip":
         ip_txt = partes[2]
@@ -847,7 +1025,7 @@ def ejecutar_terminal(request: Request, datos: SolicitudTerminal, usuario_actual
                 bd.add(BloqueoEscenario(escenario_id=inst.id, direccion_ip=ip_txt, motivo="Manual block")); bd.commit()
         if not bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_txt).first():
             bd.add(IpBloqueada(direccion_ip=ip_txt, motivo="Manual block")); bd.commit()
-        guardar("OK"); return {"salida": f"iptables: blocked {ip_txt}"}
+        guardar("OK"); return {"salida": f"iptables -A INPUT -s {ip_txt} -j DROP\n→ {ip_txt} bloqueada correctamente."}
 
     if base == "unblock" and len(partes) >= 3 and partes[1] == "ip":
         ip_txt = partes[2]
@@ -856,10 +1034,45 @@ def ejecutar_terminal(request: Request, datos: SolicitudTerminal, usuario_actual
             bloq = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_txt).first()
             if bloq: bd.delete(bloq); bd.commit()
         existe = bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_txt).first()
-        if existe: bd.delete(existe); bd.commit(); guardar("OK"); return {"salida": f"iptables: unblocked {ip_txt}"}
-        guardar("OK"); return {"salida": f"iptables: {ip_txt} was not blocked"}
+        if existe: bd.delete(existe); bd.commit(); guardar("OK"); return {"salida": f"iptables -D INPUT -s {ip_txt} -j DROP\n→ {ip_txt} desbloqueada."}
+        guardar("OK"); return {"salida": f"{ip_txt} no estaba bloqueada."}
 
-    guardar("ERROR"); return {"salida": f"bash: {raw}: command not found"}
+    # ── Todo lo demás → OpenAI con contexto real ─────────────────
+    try:
+        _, inst_activa = obtener_instancia_activa_usuario(bd, usuario_actual.id)
+        contexto_escenario = ""
+        if inst_activa:
+            contexto_escenario = f"Escenario activo: {inst_activa.titulo_caso}\n"
+        contexto_real = _construir_contexto_real(bd, usuario_actual.id)
+
+        ai_resp = cliente_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Eres una terminal Kali Linux real en un laboratorio educativo de ciberseguridad (CyberLab). "
+                        "El usuario es un estudiante de ciberseguridad realizando ejercicios de pentesting. "
+                        "Responde EXACTAMENTE como lo haría la terminal real de Kali Linux al ejecutar el comando. "
+                        "Usa el contexto del laboratorio para hacer las respuestas coherentes con el escenario real. "
+                        "Responde SOLO con la salida del terminal, sin explicaciones ni comentarios fuera de la salida. "
+                        "Máximo 25 líneas. Formato realista de terminal Linux. "
+                        "Si el comando no existe o falla, responde con el error exacto que daría bash/Kali.\n\n"
+                        + contexto_escenario
+                        + contexto_real
+                    )
+                },
+                {"role": "user", "content": raw}
+            ],
+            max_tokens=500,
+            temperature=0.2,
+        )
+        salida_ia = ai_resp.choices[0].message.content.strip()
+        guardar("OK")
+        return {"salida": salida_ia}
+    except Exception:
+        guardar("ERROR")
+        return {"salida": f"bash: {raw}: command not found"}
 
 
 # ── Terminal defensa ──────────────────────────────────────────────
@@ -889,184 +1102,392 @@ def terminal_defensiva(request: Request, datos: SolicitudTerminalDefensa, usuari
     if base in ["ayuda", "help", "?"]:
         guardar("OK")
         return {"salida": (
-            "CyberLab SOC Terminal — Modo Defensa\n"
-            "eventos | eventos recientes | eventos fuerza-bruta | eventos escaneo\n"
-            "alertas | alertas criticas | alertas activas\n"
-            "analizar-ip <IP> | historial-ip <IP> | trafico-ip <IP>\n"
-            "bloquear-ip <IP> | desbloquear-ip <IP> | ips-bloqueadas\n"
-            "logs | logs auth | logs firewall | logs ssh | logs web\n"
-            "estado-sistema | estado-firewall | estado-servidor | estado-red\n"
-            "correlacionar | generar-reporte | whoami | clear\n"
+            "CyberLab SOC Terminal — comandos reales Linux/Kali\n"
+            "─────────────────────────────────────────────────────\n"
+            "EVENTOS:   journalctl -n 50 | journalctl -n 10\n"
+            "           grep Failed /var/log/auth.log\n"
+            "           grep scan /var/log/syslog | netstat -an\n"
+            "ALERTAS:   tail -50 /var/log/syslog | tail -f /var/log/syslog\n"
+            "           grep -i crit /var/log/syslog\n"
+            "ANÁLISIS:  nmap -sV <IP> | tcpdump host <IP> -c 20\n"
+            "           grep <IP> /var/log/auth.log\n"
+            "BLOQUEO:   iptables -A INPUT -s <IP> -j DROP\n"
+            "           iptables -D INPUT -s <IP> -j DROP\n"
+            "           iptables -L INPUT -n\n"
+            "LOGS:      cat /var/log/syslog | cat /var/log/auth.log\n"
+            "           iptables -L -v | grep sshd /var/log/auth.log\n"
+            "           tail -50 /var/log/nginx/access.log\n"
+            "ESTADO:    systemctl status | top -bn1\n"
+            "           iptables -L -n -v | netstat -tulpn\n"
+            "MISC:      lastb -n 20 | export-report | whoami | clear\n"
         )}
 
     if cmd_l == "whoami":
-        guardar("OK"); return {"salida": f"{usuario_actual.nombre_usuario} [rol: analista-soc]"}
+        guardar("OK"); return {"salida": f"{usuario_actual.nombre_usuario} [uid=1000(soc-analyst) gid=1000 groups=1000,sudo]"}
 
-    if cmd_l == "eventos":
-        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(12).all()
-        if not evs: return {"salida": "No hay eventos registrados."}
-        lineas = [f"EVENTOS — Total: {bd.query(Evento).count()}"]
+    # ── journalctl → eventos ───────────────────────────────────────
+    if cmd_l == "journalctl -n 50":
+        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(50).all()
+        if not evs: return {"salida": "-- No entries --"}
+        lineas = [f"-- Journal begins. --"]
         for e in evs:
-            ts = e.fecha_creacion.strftime("%H:%M:%S") if e.fecha_creacion else "N/A"
-            lineas.append(f"[{ts}] {e.tipo_evento:<20} src={e.ip_origen:<18} {e.descripcion[:55]}")
+            ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab kernel: [{e.tipo_evento}] src={e.ip_origen} {e.descripcion[:55]}")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "eventos recientes":
-        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(5).all()
-        lineas = ["EVENTOS RECIENTES:"]
+    if cmd_l == "journalctl -n 10":
+        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(10).all()
+        lineas = ["-- Journal begins (last 10). --"]
         for e in evs:
-            ts = e.fecha_creacion.strftime("%H:%M:%S") if e.fecha_creacion else "N/A"
-            lineas.append(f"[{ts}] {e.tipo_evento} | src={e.ip_origen} | {e.descripcion[:60]}")
+            ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab kernel: [{e.tipo_evento}] src={e.ip_origen} {e.descripcion[:55]}")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "eventos fuerza-bruta":
-        evs = bd.query(Evento).filter(Evento.tipo_evento.ilike("%fuerza%")).order_by(Evento.fecha_creacion.desc()).limit(10).all()
+    # ── grep Failed /var/log/auth.log → fuerza bruta ───────────────
+    if cmd_l == "grep failed /var/log/auth.log":
+        evs = bd.query(Evento).filter(Evento.tipo_evento.ilike("%fuerza%")).order_by(Evento.fecha_creacion.desc()).limit(15).all()
         total = bd.query(Evento).filter(Evento.tipo_evento.ilike("%fuerza%")).count()
-        lineas = [f"EVENTOS FUERZA BRUTA — {total} registros:"]
+        if not evs: return {"salida": "(no output)"}
+        lineas = []
         for e in evs:
-            ts = e.fecha_creacion.strftime("%H:%M:%S") if e.fecha_creacion else "N/A"
-            lineas.append(f"[{ts}] BRUTE-FORCE src={e.ip_origen} | {e.descripcion[:65]}")
-        if total >= 5: lineas.append(f"⚠ {total} intentos — bloqueo recomendado.")
+            ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab sshd[1234]: Failed password for root from {e.ip_origen} port 54321 ssh2")
+        if total >= 5: lineas.append(f"# {total} failed attempts — immediate action recommended")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "eventos escaneo":
+    # ── grep scan /var/log/syslog → escaneo ───────────────────────
+    if cmd_l == "grep scan /var/log/syslog":
         evs = bd.query(Evento).filter(Evento.tipo_evento.ilike("%escaneo%")).order_by(Evento.fecha_creacion.desc()).limit(10).all()
         total = bd.query(Evento).filter(Evento.tipo_evento.ilike("%escaneo%")).count()
-        lineas = [f"EVENTOS ESCANEO — {total} registros:"]
+        if not evs: return {"salida": "(no output)"}
+        lineas = []
         for e in evs:
-            ts = e.fecha_creacion.strftime("%H:%M:%S") if e.fecha_creacion else "N/A"
-            lineas.append(f"[{ts}] PORT-SCAN src={e.ip_origen} | {e.descripcion[:65]}")
+            ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab kernel: [portscan] NMAP SYN scan detected from {e.ip_origen}")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "eventos red":
+    # ── netstat -an → conexiones de red ───────────────────────────
+    if cmd_l == "netstat -an":
         evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(8).all()
         ips = list(set(e.ip_origen for e in evs))
-        lineas = ["EVENTOS RED:"] + [f"→ {ip:<18} {bd.query(Evento).filter(Evento.ip_origen == ip).count()} eventos" for ip in ips[:6]]
+        lineas = ["Active Internet connections (servers and established)",
+                  "Proto Recv-Q Send-Q Local Address           Foreign Address         State"]
+        for ip in ips[:6]:
+            cnt = bd.query(Evento).filter(Evento.ip_origen == ip).count()
+            lineas.append(f"tcp        0      0 0.0.0.0:22              {ip}:54{cnt:03d}    ESTABLISHED")
+        lineas.append("tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l in ["alertas", "alertas activas"]:
+    # ── tail -50 /var/log/syslog → alertas ────────────────────────
+    if cmd_l == "tail -50 /var/log/syslog":
         als = bd.query(Alerta).order_by(Alerta.fecha_creacion.desc()).limit(10).all()
-        if not als: return {"salida": "Sin alertas activas."}
-        lineas = [f"ALERTAS — Total: {bd.query(Alerta).count()}"]
+        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(15).all()
+        if not als and not evs: return {"salida": "(empty log)"}
+        lineas = []
         for a in als:
-            ts  = a.fecha_creacion.strftime("%H:%M:%S") if a.fecha_creacion else "N/A"
-            sev = "🔴" if a.severidad == "Alta" else "🟡"
-            lineas.append(f"[{ts}] {sev} [{a.severidad}] {a.titulo}\n  └─ {a.descripcion[:70]}")
+            ts = a.fecha_creacion.strftime("%b %d %H:%M:%S") if a.fecha_creacion else "N/A"
+            sev = "CRIT" if a.severidad in ("Alta","Crítica","Critica") else "WARN"
+            lineas.append(f"{ts} soc-lab ids[999]: [{sev}] {a.titulo}: {a.descripcion[:70]}")
+        for e in evs:
+            ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab kernel: {e.tipo_evento} from {e.ip_origen}")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "alertas criticas":
+    # ── grep -i crit /var/log/syslog → alertas críticas ──────────
+    if cmd_l == "grep -i crit /var/log/syslog":
         als = bd.query(Alerta).filter(Alerta.severidad.in_(["Alta","Crítica","Critica"])).order_by(Alerta.fecha_creacion.desc()).limit(8).all()
-        if not als: return {"salida": "No hay alertas críticas."}
-        lineas = [f"🔴 ALERTAS CRÍTICAS — {len(als)}:"]
+        if not als: return {"salida": "(no output)"}
+        lineas = []
         for a in als:
-            lineas.append(f"🔴 {a.titulo}\n  └─ {a.descripcion[:75]}")
+            ts = a.fecha_creacion.strftime("%b %d %H:%M:%S") if a.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab ids[999]: [CRIT] {a.titulo}: {a.descripcion[:75]}")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l.startswith("analizar-ip"):
-        ip_obj = partes[1] if len(partes) > 1 else ip_escenario or "?"
+    # ── tail -f /var/log/syslog → alertas activas (streaming) ─────
+    if cmd_l == "tail -f /var/log/syslog":
+        als = bd.query(Alerta).order_by(Alerta.fecha_creacion.desc()).limit(5).all()
+        lineas = ["==> /var/log/syslog <=="]
+        for a in als:
+            ts = a.fecha_creacion.strftime("%b %d %H:%M:%S") if a.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab ids[999]: {a.titulo}")
+        lineas.append("^C")
+        guardar("OK"); return {"salida": "\n".join(lineas)}
+
+    # ── nmap -sV <IP> → análisis de IP ────────────────────────────
+    if base == "nmap":
+        ip_obj = partes[-1] if len(partes) > 1 else ip_escenario or "?"
         evs    = bd.query(Evento).filter(Evento.ip_origen == ip_obj).all()
         total  = len(evs)
         tipos  = list(set(e.tipo_evento for e in evs))
         bloq   = bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_obj).first()
         riesgo = "CRÍTICO" if total >= 8 else "ALTO" if total >= 4 else "MEDIO" if total >= 2 else "BAJO"
         guardar("OK")
-        return {"salida": f"ANÁLISIS IP: {ip_obj}\nEstado: {'BLOQUEADA' if bloq else 'ACTIVA'}\nRiesgo: {riesgo}\nEventos: {total}\nTipos: {', '.join(tipos) if tipos else 'ninguno'}"}
+        return {"salida": (
+            f"Starting Nmap 7.94 ( https://nmap.org )\n"
+            f"Nmap scan report for {ip_obj}\n"
+            f"Host is {'up' if not bloq else 'filtered (blocked)'}.\n"
+            f"PORT     STATE  SERVICE   VERSION\n"
+            f"22/tcp   open   ssh       OpenSSH 8.9\n"
+            f"80/tcp   open   http      nginx 1.22\n"
+            f"443/tcp  open   https     nginx 1.22\n"
+            f"Riesgo: {riesgo} | Eventos: {total} | Tipos: {', '.join(tipos) if tipos else 'ninguno'}\n"
+            f"Nmap done: 1 IP address scanned"
+        )}
 
-    if cmd_l.startswith("historial-ip"):
-        ip_obj = partes[1] if len(partes) > 1 else ip_escenario or "?"
-        evs = bd.query(Evento).filter(Evento.ip_origen == ip_obj).order_by(Evento.fecha_creacion.asc()).all()
-        if not evs: return {"salida": f"Sin historial para {ip_obj}."}
-        lineas = [f"HISTORIAL {ip_obj} ({len(evs)} eventos):"]
-        for e in evs:
-            ts = e.fecha_creacion.strftime("%H:%M:%S") if e.fecha_creacion else "N/A"
-            lineas.append(f"[{ts}] {e.tipo_evento} {e.descripcion[:55]}")
-        guardar("OK"); return {"salida": "\n".join(lineas)}
+    # ── grep <IP> /var/log/auth.log → historial de IP ─────────────
+    if base == "grep" and len(partes) >= 3 and "/var/log/auth.log" in cmd_l:
+        # detectar si es búsqueda de IP (historial) vs otros greps de auth.log
+        termino = partes[1]
+        es_ip_busqueda = all(c.isdigit() or c == "." for c in termino)
+        if es_ip_busqueda:
+            ip_obj = termino
+            evs = bd.query(Evento).filter(Evento.ip_origen == ip_obj).order_by(Evento.fecha_creacion.asc()).all()
+            if not evs: return {"salida": f"(no output — {ip_obj} not found in auth.log)"}
+            lineas = []
+            for e in evs:
+                ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+                lineas.append(f"{ts} soc-lab sshd[1234]: Failed password from {ip_obj} port 22 ssh2")
+            guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l.startswith("trafico-ip"):
-        ip_obj = partes[1] if len(partes) > 1 else ip_escenario or "?"
-        total  = bd.query(Evento).filter(Evento.ip_origen == ip_obj).count()
+        # grep sshd /var/log/auth.log
+        if termino == "sshd":
+            evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(10).all()
+            lineas = []
+            for e in evs:
+                ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+                lineas.append(f"{ts} soc-lab sshd[1234]: Failed password from {e.ip_origen} port 22 ssh2")
+            guardar("OK"); return {"salida": "\n".join(lineas)}
+
+    # ── tcpdump host <IP> -c 20 → tráfico de IP ───────────────────
+    if base == "tcpdump":
+        # extraer IP: buscar "host" en partes
+        ip_obj = ip_escenario or "?"
+        try:
+            idx = partes.index("host")
+            ip_obj = partes[idx + 1]
+        except (ValueError, IndexError):
+            pass
+        total = bd.query(Evento).filter(Evento.ip_origen == ip_obj).count()
         guardar("OK")
-        return {"salida": f"TRÁFICO {ip_obj}\nConexiones: {total}\nProtocolo: TCP\nPuertos: 22,80,443\nVelocidad: {total*3} req/min (ANÓMALO)"}
+        return {"salida": (
+            f"tcpdump: verbose output suppressed, use -v/-vv for full protocol decode\n"
+            f"listening on eth0, link-type EN10MB (Ethernet)\n"
+            f"IP {ip_obj}.54321 > soc-lab.22: Flags [S], seq 0, win 64240\n"
+            f"IP {ip_obj}.54322 > soc-lab.80: Flags [S], seq 1, win 64240\n"
+            f"IP {ip_obj}.54323 > soc-lab.443: Flags [S], seq 2, win 64240\n"
+            f"20 packets captured | Total eventos: {total} | Velocidad: {total*3} pkt/s (ANÓMALO)\n"
+            f"20 packets received by filter"
+        )}
 
-    if cmd_l.startswith("bloquear-ip"):
-        ip_obj = partes[1] if len(partes) > 1 else ip_escenario or "?"
+    # ── iptables -A INPUT -s <IP> -j DROP → bloquear ──────────────
+    if base == "iptables" and "-a" in partes and "drop" in partes:
+        try:
+            idx = partes.index("-s")
+            ip_obj = partes[idx + 1]
+        except (ValueError, IndexError):
+            ip_obj = ip_escenario or "?"
         _, inst = obtener_instancia_activa_usuario(bd, usuario_actual.id)
         if inst:
             if not bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_obj).first():
-                bd.add(BloqueoEscenario(escenario_id=inst.id, direccion_ip=ip_obj, motivo="Bloqueo defensivo SOC")); bd.commit()
+                bd.add(BloqueoEscenario(escenario_id=inst.id, direccion_ip=ip_obj, motivo="iptables DROP rule")); bd.commit()
         if not bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_obj).first():
-            bd.add(IpBloqueada(direccion_ip=ip_obj, motivo="Bloqueo defensivo SOC")); bd.commit()
+            bd.add(IpBloqueada(direccion_ip=ip_obj, motivo=f"iptables -A INPUT -s {ip_obj} -j DROP")); bd.commit()
         guardar("OK")
-        return {"salida": f"🛡 BLOQUEADA: {ip_obj}\nRegla firewall aplicada.\nUsa 'ips-bloqueadas' para confirmar."}
+        return {"salida": f"# regla DROP aplicada para {ip_obj}\n# iptables -L INPUT -n para verificar"}
 
-    if cmd_l.startswith("desbloquear-ip"):
-        ip_obj = partes[1] if len(partes) > 1 else "?"
+    # ── iptables -D INPUT -s <IP> -j DROP → desbloquear ──────────
+    if base == "iptables" and "-d" in partes and "drop" in partes:
+        try:
+            idx = partes.index("-s")
+            ip_obj = partes[idx + 1]
+        except (ValueError, IndexError):
+            ip_obj = "?"
         existe = bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_obj).first()
-        if existe: bd.delete(existe); bd.commit(); guardar("OK"); return {"salida": f"✓ {ip_obj} desbloqueada."}
-        guardar("OK"); return {"salida": f"{ip_obj} no estaba bloqueada."}
+        if existe: bd.delete(existe); bd.commit(); guardar("OK"); return {"salida": f"# regla DROP eliminada para {ip_obj}"}
+        guardar("OK"); return {"salida": f"iptables: Bad rule (does not exist): No such file or directory — {ip_obj} not in chain"}
 
-    if cmd_l == "ips-bloqueadas":
+    # ── iptables -L INPUT -n → IPs bloqueadas ─────────────────────
+    if base == "iptables" and "-l" in partes and "input" in partes:
         ips = bd.query(IpBloqueada).order_by(IpBloqueada.id.desc()).all()
-        if not ips: return {"salida": "No hay IPs bloqueadas."}
-        lineas = [f"IPs BLOQUEADAS — {len(ips)} reglas:"]
-        for ip in ips: lineas.append(f"🔴 {ip.direccion_ip:<18} {ip.motivo or ''}")
+        lineas = ["Chain INPUT (policy ACCEPT)", "target     prot opt source               destination"]
+        for ip in ips: lineas.append(f"DROP       all  --  {ip.direccion_ip:<20} 0.0.0.0/0")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "logs":
-        guardar("OK"); return {"salida": f"LOGS: eventos={bd.query(Evento).count()} alertas={bd.query(Alerta).count()}"}
-    if cmd_l == "logs auth":
-        evs = bd.query(Evento).filter(Evento.tipo_evento.ilike("%fuerza%")).order_by(Evento.fecha_creacion.desc()).limit(10).all()
-        lineas = [f"AUTH LOG — {len(evs)} entradas:"]
-        for e in evs:
-            ts = e.fecha_creacion.strftime("%H:%M:%S") if e.fecha_creacion else "N/A"
-            lineas.append(f"[{ts}] AUTH_FAIL src={e.ip_origen}")
-        guardar("OK"); return {"salida": "\n".join(lineas)}
-    if cmd_l == "logs firewall":
-        ips = bd.query(IpBloqueada).all()
-        lineas = ["FIREWALL LOG:"] + [f"DROP src={ip.direccion_ip}" for ip in ips]
-        guardar("OK"); return {"salida": "\n".join(lineas)}
-    if cmd_l == "logs ssh":
-        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(8).all()
-        lineas = ["SSH LOG:"] + [f"Failed password from {e.ip_origen} port 22" for e in evs]
-        guardar("OK"); return {"salida": "\n".join(lineas)}
-    if cmd_l == "logs web":
-        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(5).all()
-        lineas = ["WEB LOG:"] + [f"{e.ip_origen} GET /admin 401" for e in evs]
-        guardar("OK"); return {"salida": "\n".join(lineas)}
-
-    if cmd_l == "estado-sistema":
-        total_e = bd.query(Evento).count(); total_a = bd.query(Alerta).count(); total_b = bd.query(IpBloqueada).count()
-        riesgo  = "ALTO" if total_a >= 3 else "MEDIO" if total_a >= 1 else "BAJO"
-        guardar("OK")
-        return {"salida": f"SISTEMA: {'BAJO ATAQUE' if total_a >= 2 else 'OPERATIVO'}\nRiesgo: {riesgo}\nEventos: {total_e} Alertas: {total_a} Bloqueadas: {total_b}"}
-    if cmd_l == "estado-firewall":
+    # ── iptables -L -v / -L -n -v → estado firewall ───────────────
+    if base == "iptables" and "-l" in partes:
         total_b = bd.query(IpBloqueada).count()
-        guardar("OK"); return {"salida": f"FIREWALL: ACTIVO\nReglas DROP: {total_b}"}
-    if cmd_l == "estado-servidor":
+        ips = bd.query(IpBloqueada).order_by(IpBloqueada.id.desc()).limit(5).all()
+        lineas = [f"Chain INPUT (policy ACCEPT {total_b} rules)",
+                  "pkts bytes target  prot opt in  out  source      destination"]
+        for ip in ips:
+            lineas.append(f"  42  2.1K DROP    all  --  any any  {ip.direccion_ip}  anywhere")
+        guardar("OK"); return {"salida": "\n".join(lineas)}
+
+    # ── cat /var/log/syslog → logs ────────────────────────────────
+    if cmd_l == "cat /var/log/syslog":
+        total_e = bd.query(Evento).count(); total_a = bd.query(Alerta).count()
+        guardar("OK"); return {"salida": f"/var/log/syslog: {total_e} eventos registrados, {total_a} alertas\nUsa tail -50 /var/log/syslog para ver las últimas entradas."}
+
+    # ── cat /var/log/auth.log → logs auth ─────────────────────────
+    if cmd_l == "cat /var/log/auth.log":
+        evs = bd.query(Evento).filter(Evento.tipo_evento.ilike("%fuerza%")).order_by(Evento.fecha_creacion.desc()).limit(12).all()
+        if not evs: return {"salida": "(empty)"}
+        lineas = []
+        for e in evs:
+            ts = e.fecha_creacion.strftime("%b %d %H:%M:%S") if e.fecha_creacion else "N/A"
+            lineas.append(f"{ts} soc-lab sshd[1234]: Failed password for root from {e.ip_origen} port 22 ssh2")
+        guardar("OK"); return {"salida": "\n".join(lineas)}
+
+    # ── tail -50 /var/log/nginx/access.log → logs web ─────────────
+    if cmd_l == "tail -50 /var/log/nginx/access.log":
+        evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(8).all()
+        lineas = []
+        for e in evs:
+            ts = e.fecha_creacion.strftime("%d/%b/%Y:%H:%M:%S") if e.fecha_creacion else "N/A"
+            lineas.append(f'{e.ip_origen} - - [{ts} +0000] "GET /admin HTTP/1.1" 401 512')
+        guardar("OK"); return {"salida": "\n".join(lineas) if lineas else "(empty log)"}
+
+    # ── systemctl status → estado del sistema ─────────────────────
+    if cmd_l == "systemctl status":
+        total_e = bd.query(Evento).count(); total_a = bd.query(Alerta).count(); total_b = bd.query(IpBloqueada).count()
+        riesgo  = "degraded" if total_a >= 2 else "running"
+        guardar("OK")
+        return {"salida": (
+            f"● soc-lab\n"
+            f"    State: {riesgo}\n"
+            f"     Jobs: 0 queued\n"
+            f"   Failed: {total_a} units\n"
+            f"    Since: Mon 2025-01-01 00:00:00 UTC\n"
+            f"   CGroup: /\n"
+            f"           Eventos: {total_e} | Alertas: {total_a} | Bloqueadas: {total_b}\n"
+            f"           Riesgo: {'ALTO' if total_a >= 3 else 'MEDIO' if total_a >= 1 else 'BAJO'}"
+        )}
+
+    # ── top -bn1 → estado del servidor ────────────────────────────
+    if cmd_l == "top -bn1":
         total_e = bd.query(Evento).count()
-        guardar("OK"); return {"salida": f"SERVIDOR: {'DEGRADADO' if total_e >= 8 else 'OPERATIVO'}\nCPU: {min(30+total_e*2,95)}% RAM: {min(40+total_e,90)}%"}
-    if cmd_l == "estado-red":
+        cpu = min(30 + total_e * 2, 95); ram = min(40 + total_e, 90)
+        guardar("OK")
+        return {"salida": (
+            f"top - 12:00:00 up 5 days,  3:22,  1 user,  load average: {cpu/10:.2f}, {cpu/12:.2f}, {cpu/15:.2f}\n"
+            f"Tasks: 142 total,   1 running, 141 sleeping\n"
+            f"%Cpu(s): {cpu}.0 us,  2.0 sy,  0.0 ni, {100-cpu-2}.0 id\n"
+            f"MiB Mem :   3942.0 total,    {3942-int(3942*ram/100)}.0 free,   {int(3942*ram/100)}.0 used\n"
+            f"Estado: {'⚠ DEGRADADO — alta carga de CPU' if cpu >= 70 else '✓ OPERATIVO'}"
+        )}
+
+    # ── netstat -tulpn → estado de red ────────────────────────────
+    if cmd_l == "netstat -tulpn":
         evs = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(5).all()
         ips = list(set(e.ip_origen for e in evs))
-        guardar("OK"); return {"salida": f"RED: {'ANÓMALA' if len(ips) >= 2 else 'NORMAL'}\nIPs activas: {len(ips)}"}
+        lineas = ["Active Internet connections (only servers)",
+                  "Proto Recv-Q Send-Q Local Address    Foreign Address  State   PID/Program",
+                  "tcp        0      0 0.0.0.0:22       0.0.0.0:*        LISTEN  1001/sshd",
+                  "tcp        0      0 0.0.0.0:80       0.0.0.0:*        LISTEN  1002/nginx",
+                  "tcp        0      0 0.0.0.0:443      0.0.0.0:*        LISTEN  1002/nginx"]
+        for ip in ips[:3]:
+            lineas.append(f"tcp        0      0 0.0.0.0:22       {ip}:*     ESTABLISHED  1001/sshd")
+        guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "correlacionar":
+    # ── lastb -n 20 → intentos fallidos / correlación ─────────────
+    if cmd_l == "lastb -n 20":
         total_e = bd.query(Evento).count(); total_a = bd.query(Alerta).count()
         evs_fb  = bd.query(Evento).filter(Evento.tipo_evento.ilike("%fuerza%")).count()
         evs_sc  = bd.query(Evento).filter(Evento.tipo_evento.ilike("%escaneo%")).count()
+        evs     = bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(10).all()
         ips     = list(set(e.ip_origen for e in bd.query(Evento).order_by(Evento.fecha_creacion.desc()).limit(20).all()))
-        lineas  = [f"CORRELACIÓN: eventos={total_e} alertas={total_a} ips={len(ips)}",
-                   f"Fuerza bruta: {evs_fb} | Escaneo: {evs_sc}"]
-        if evs_fb >= 3 and evs_sc >= 2: lineas.append("[ALTA] Reconocimiento + fuerza bruta — ataque en 2 fases")
-        if total_a >= 2: lineas.append("[ALTA] Múltiples alertas — incidente confirmado")
+        lineas  = ["btmp begins Mon Jan  1 00:00:00 2025"]
+        for e in evs:
+            ts = e.fecha_creacion.strftime("%a %b %d %H:%M") if e.fecha_creacion else "N/A"
+            lineas.append(f"root     ssh:{e.ip_origen}    {e.ip_origen}    {ts}   still logged in")
+        lineas.append(f"\n# Correlación: eventos={total_e} alertas={total_a} ips_únicas={len(ips)}")
+        lineas.append(f"# Fuerza bruta: {evs_fb} | Escaneo: {evs_sc}")
+        if evs_fb >= 3 and evs_sc >= 2: lineas.append("# [ALTA] Reconocimiento + fuerza bruta — ataque en 2 fases")
+        if total_a >= 2: lineas.append("# [ALTA] Múltiples alertas — incidente confirmado")
         guardar("OK"); return {"salida": "\n".join(lineas)}
 
-    if cmd_l == "generar-reporte":
+    # ── export-report → reporte ────────────────────────────────────
+    if cmd_l == "export-report":
         total_e = bd.query(Evento).count(); total_a = bd.query(Alerta).count(); total_b = bd.query(IpBloqueada).count()
         guardar("OK")
-        return {"salida": f"REPORTE DEFENSIVO\nAnalista: {usuario_actual.nombre_usuario}\nEventos: {total_e} Alertas: {total_a} Bloqueadas: {total_b}\nEstado: ✅ GENERADO"}
+        return {"salida": (
+            f"=== INCIDENT REPORT — CyberLab SOC ===\n"
+            f"Analista: {usuario_actual.nombre_usuario}\n"
+            f"Eventos:  {total_e} | Alertas: {total_a} | IPs bloqueadas: {total_b}\n"
+            f"Estado:   ✅ REPORTE GENERADO\n"
+            f"Archivo guardado: /var/log/soc/report_{usuario_actual.nombre_usuario}.txt"
+        )}
 
-    guardar("ERROR"); return {"salida": f"bash: {raw}: command not found\nEscribe 'ayuda' para ver comandos."}
+    # ── Fallback → OpenAI con contexto real ──────────────────────
+    try:
+        contexto_real = _construir_contexto_real(bd, usuario_actual.id)
+        ai_resp = cliente_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Eres una terminal SOC (Security Operations Center) de un laboratorio educativo de ciberseguridad (CyberLab). "
+                        "El operador es un estudiante de blue team / defensa. "
+                        "Responde EXACTAMENTE como lo haría la terminal real al ejecutar el comando. "
+                        "Usa el contexto del laboratorio para hacer las respuestas coherentes con el escenario real. "
+                        "Responde SOLO con la salida del terminal, sin explicaciones ni comentarios fuera de la salida. "
+                        "Máximo 25 líneas. Formato realista de terminal Linux. "
+                        "Si el comando no existe, responde con el error exacto que daría bash.\n\n"
+                        + contexto_real
+                    )
+                },
+                {"role": "user", "content": raw}
+            ],
+            max_tokens=500,
+            temperature=0.2,
+        )
+        salida_ia = ai_resp.choices[0].message.content.strip()
+        guardar("OK")
+        return {"salida": salida_ia}
+    except Exception:
+        guardar("ERROR")
+        return {"salida": f"bash: {raw}: command not found\nEscribe 'ayuda' para ver los comandos del SOC."}
+
+
+# ── Recuperación de contraseña ────────────────────────────────────
+
+@app.post("/auth/recuperar-contrasena")
+@limiter.limit("5/minute")
+def recuperar_contrasena(request: Request, datos: SolicitudRecuperarContrasena, bd: Session = Depends(obtener_bd)):
+    import secrets
+    from datetime import datetime, timezone, timedelta
+    # Siempre responder igual para no revelar si el correo existe
+    usuario = bd.query(Usuario).filter(Usuario.correo == datos.correo.strip().lower()).first()
+    if usuario:
+        token = secrets.token_urlsafe(32)
+        usuario.token_reset = token
+        usuario.token_reset_expira = datetime.now(timezone.utc) + timedelta(hours=1)
+        bd.commit()
+        correo_recuperar_contrasena(
+            destinatario=usuario.correo,
+            nombre=usuario.nombre or usuario.nombre_usuario,
+            token=token,
+        )
+    return {"mensaje": "Si ese correo está registrado, recibirás un enlace para restablecer tu contraseña."}
+
+
+@app.post("/auth/reset-contrasena")
+@limiter.limit("10/minute")
+def reset_contrasena(request: Request, datos: SolicitudResetContrasena, bd: Session = Depends(obtener_bd)):
+    from datetime import datetime, timezone
+    if not datos.nueva_contrasena or len(datos.nueva_contrasena) < 6:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+    usuario = bd.query(Usuario).filter(Usuario.token_reset == datos.token).first()
+    if not usuario:
+        raise HTTPException(status_code=400, detail="Token inválido o expirado")
+    if usuario.token_reset_expira and usuario.token_reset_expira.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="El enlace expiró. Solicita uno nuevo.")
+    usuario.contrasena = hashear_contrasena(datos.nueva_contrasena)
+    usuario.token_reset = None
+    usuario.token_reset_expira = None
+    bd.commit()
+    return {"mensaje": "Contraseña actualizada correctamente. Ya puedes iniciar sesión."}
 
 
 # ── Feedback IA ───────────────────────────────────────────────────
@@ -1079,3 +1500,427 @@ def ia_feedback(body: SolicitudFeedbackIA, usuario_actual: Usuario = Depends(obt
     )
     r = cliente_openai.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}], max_tokens=400)
     return {"feedback": r.choices[0].message.content.strip()}
+
+
+# ── Ejercicios creados por docente ────────────────────────────────
+
+@app.post("/ejercicios-docente/crear")
+def crear_ejercicio_docente(
+    datos: SolicitudCrearEjercicioDocente,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Solo docentes y admin pueden crear ejercicios")
+    # Generar escenario/contexto con IA
+    contexto_ia = None
+    try:
+        items_texto = "\n".join(f"- {it.descripcion}" for it in datos.items) if datos.items else "(sin puntos definidos)"
+        temas_ataque_ctx = {
+            1: "Introducción y fundamentos: conceptos básicos de redes, reconocimiento del entorno, primeros pasos sin experiencia previa.",
+            2: "Fuerza bruta y control de acceso: servicios con autenticación débil, acceso no autorizado mediante credenciales.",
+            3: "Reconocimiento y escaneo de puertos: descubrimiento de hosts, servicios expuestos, arquitectura de red del objetivo.",
+            4: "Inyección SQL: aplicaciones web con parámetros vulnerables, extracción de información de bases de datos.",
+            5: "XSS y explotación web: formularios vulnerables, robo de sesiones, análisis de aplicaciones web.",
+            6: "Contención y hardening: aplicar mitigaciones tras identificar vulnerabilidades, asegurar servicios.",
+            7: "Monitoreo y detección: análisis de logs, correlación de eventos, identificación de patrones de ataque.",
+        }
+        temas_defensa_ctx = {
+            1: "Monitoreo básico SOC: revisión de alertas del IDS, flujo de trabajo del analista, primeras acciones ante incidente.",
+            2: "Detección de fuerza bruta: patrones de autenticación fallida, bloqueo de atacantes, análisis de logs de acceso.",
+            3: "Reconocimiento entrante: detectar escaneos de red, identificar servicios expuestos, correlacionar eventos de reconocimiento.",
+            4: "Investigación de incidentes: recopilar evidencia, trazar línea de tiempo, identificar vector de entrada y alcance.",
+            5: "Respuesta activa: contención, aislamiento, aplicación de parches y reglas de firewall en caliente.",
+            6: "Multi-vector: ataques combinados (fuerza bruta + escaneo + explotación), priorización defensiva.",
+            7: "SOC integral autónomo: gestión completa del incidente, informes técnicos y ejecutivos, sin asistencia.",
+        }
+        temas_ctx = temas_ataque_ctx if datos.tipo == "ataque" else temas_defensa_ctx
+        tema_nivel_ctx = temas_ctx.get(datos.nivel, temas_ctx[1])
+        complejidad_ctx = (
+            "básica y guiada, pensada para estudiantes que están empezando" if datos.nivel <= 2 else
+            "media, el estudiante debe decidir qué hacer sin que se le indique explícitamente" if datos.nivel <= 4 else
+            "alta, múltiples vectores, ambigüedad deliberada, requiere criterio técnico propio" if datos.nivel <= 6 else
+            "máxima, operación completamente autónoma, sin pistas ni andamiaje"
+        )
+        prompt_esc = (
+            f"Eres un docente universitario de ciberseguridad. Crea el escenario narrativo para un ejercicio práctico del sistema CyberLab.\n\n"
+            f"INSTRUCCIÓN CLAVE: Los estudiantes ya conocen los comandos y herramientas del nivel porque los estudiaron en la sección 'Información'. "
+            f"Tu tarea es crear un CASO DE ESTUDIO REALISTA que plantee una situación a resolver, NO un tutorial. "
+            f"NO incluyas nombres de comandos específicos, flags ni pasos de cómo hacerlo. Sólo el contexto del problema.\n\n"
+            f"Tipo: {'Ataque (pentesting)' if datos.tipo == 'ataque' else 'Defensa (SOC/Blue Team)'}\n"
+            f"Nivel {datos.nivel} — Tema: {tema_nivel_ctx}\n"
+            f"Complejidad del escenario: {complejidad_ctx}\n"
+            f"Título: {datos.titulo}\n"
+            f"Objetivos del ejercicio:\n{items_texto}\n\n"
+            f"Genera un escenario de 3-4 párrafos con: nombre de empresa ficticia, descripción del incidente o situación, "
+            f"qué rol juega el estudiante, y datos técnicos de contexto (IPs ficticias, servicios, fechas, síntomas observados). "
+            f"El escenario debe ser más complejo y ambiguo a mayor nivel. Redacta en español, estilo caso de estudio profesional."
+        )
+        resp = cliente_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt_esc}],
+            max_tokens=600,
+            temperature=0.7,
+        )
+        contexto_ia = resp.choices[0].message.content.strip()
+    except Exception:
+        contexto_ia = f"Escenario: {datos.titulo}\n\n{datos.descripcion}"
+
+    ejercicio = EjercicioDocente(
+        titulo=datos.titulo,
+        descripcion=datos.descripcion,
+        instrucciones=datos.instrucciones,
+        tipo=datos.tipo,
+        nivel=datos.nivel,
+        tiempo_minutos=datos.tiempo_minutos,
+        contexto_generado=contexto_ia,
+        creado_por_id=usuario_actual.id,
+    )
+    bd.add(ejercicio)
+    bd.flush()
+    for item in datos.items:
+        bd.add(ItemEjercicioDocente(
+            ejercicio_id=ejercicio.id,
+            descripcion=item.descripcion,
+            orden=item.orden,
+        ))
+    bd.commit()
+    bd.refresh(ejercicio)
+
+    # Notificar a todos los estudiantes con correo registrado
+    estudiantes = bd.query(Usuario).filter(
+        Usuario.rol == "estudiante",
+        Usuario.correo.isnot(None),
+    ).all()
+    for est in estudiantes:
+        correo_nuevo_ejercicio(
+            destinatario=est.correo,
+            nombre_estudiante=est.nombre or est.nombre_usuario,
+            titulo_ejercicio=ejercicio.titulo,
+            tipo=ejercicio.tipo,
+            nivel=ejercicio.nivel,
+            tiempo_minutos=ejercicio.tiempo_minutos,
+        )
+
+    return {"mensaje": "Ejercicio creado", "id": ejercicio.id}
+
+
+@app.get("/ejercicios-docente")
+def listar_ejercicios_docente(
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    ejercicios = bd.query(EjercicioDocente).filter(EjercicioDocente.activo == True).order_by(EjercicioDocente.fecha_creacion.asc()).all()
+    resultado = []
+    for idx, ej in enumerate(ejercicios, start=1):
+        creador = bd.query(Usuario).filter(Usuario.id == ej.creado_por_id).first()
+        resultado.append({
+            "id": ej.id,
+            "numero": idx,
+            "titulo": ej.titulo,
+            "descripcion": ej.descripcion,
+            "instrucciones": ej.instrucciones,
+            "tipo": ej.tipo,
+            "nivel": ej.nivel,
+            "tiempo_minutos": ej.tiempo_minutos,
+            "contexto_generado": ej.contexto_generado,
+            "activo": ej.activo,
+            "creado_por": creador.nombre_usuario if creador else "desconocido",
+            "fecha_creacion": ej.fecha_creacion.isoformat() if ej.fecha_creacion else None,
+            "items": [{"id": it.id, "descripcion": it.descripcion, "orden": it.orden} for it in ej.items],
+        })
+    return resultado
+
+
+@app.get("/ejercicios-docente/tipo/{tipo}")
+def ejercicios_por_tipo(
+    tipo: str,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    ejercicios = bd.query(EjercicioDocente).filter(
+        EjercicioDocente.activo == True,
+        EjercicioDocente.tipo == tipo,
+    ).order_by(EjercicioDocente.fecha_creacion.asc()).all()
+    resultado = []
+    for ej in ejercicios:
+        creador = bd.query(Usuario).filter(Usuario.id == ej.creado_por_id).first()
+        resultado.append({
+            "id": ej.id,
+            "titulo": ej.titulo,
+            "descripcion": ej.descripcion,
+            "instrucciones": ej.instrucciones,
+            "tipo": ej.tipo,
+            "nivel": ej.nivel,
+            "tiempo_minutos": ej.tiempo_minutos,
+            "contexto_generado": ej.contexto_generado,
+            "activo": ej.activo,
+            "creado_por": creador.nombre_usuario if creador else "desconocido",
+            "fecha_creacion": ej.fecha_creacion.isoformat() if ej.fecha_creacion else None,
+            "items": [{"id": it.id, "descripcion": it.descripcion, "orden": it.orden} for it in ej.items],
+        })
+    return resultado
+
+
+@app.post("/ejercicios-docente/ia-asistir")
+def ia_asistir_ejercicio(
+    datos: SolicitudIaAsistir,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    tipo_label = "Ataque (pentesting ofensivo)" if datos.tipo == "ataque" else "Defensa (SOC / Blue Team)"
+
+    # Temas reales de cada nivel según la página de Información del sistema
+    temas_ataque = {
+        1: "Introducción y fundamentos de ciberseguridad: conceptos básicos de redes, terminología, primeros pasos en un entorno de laboratorio.",
+        2: "Fuerza bruta y control de acceso: ataques de diccionario, autenticación débil, identificación de servicios vulnerables a credenciales por defecto.",
+        3: "Reconocimiento y escaneo de puertos: descubrimiento de hosts, identificación de puertos abiertos y servicios expuestos en una red.",
+        4: "Inyección SQL: detección de parámetros vulnerables, extracción de datos, evasión básica de filtros.",
+        5: "XSS (Cross-Site Scripting): inyección de scripts en aplicaciones web, robo de sesiones, análisis de formularios vulnerables.",
+        6: "Contención y hardening básico: aplicar medidas de mitigación tras un ataque, configuración de controles de seguridad.",
+        7: "Monitoreo, eventos y alertas: análisis de logs, correlación de eventos, detección de actividad maliciosa a través de alertas del sistema.",
+    }
+    temas_defensa = {
+        1: "Monitoreo básico y orientación SOC: revisar alertas del IDS, comprender el flujo de trabajo de un analista, primeras acciones ante un incidente.",
+        2: "Detección de fuerza bruta: identificar patrones de intentos fallidos de autenticación, bloqueo de IPs atacantes, análisis de logs de acceso.",
+        3: "Reconocimiento y escaneo — defensa: detectar escaneos de red entrantes, identificar qué servicios están expuestos, correlacionar eventos de escaneo.",
+        4: "Investigación de incidentes: recopilar evidencia, trazar línea de tiempo del ataque, identificar el vector de entrada y el alcance del compromiso.",
+        5: "Respuesta defensiva activa: contener el incidente, aislar sistemas afectados, aplicar parches y reglas de firewall en caliente.",
+        6: "Escenarios complejos multi-vector: responder a ataques combinados (fuerza bruta + escaneo + explotación), priorizar acciones defensivas.",
+        7: "Defensa integral autónoma: operar un SOC completo sin asistencia, redactar informes técnicos y ejecutivos, gestión completa del incidente.",
+    }
+    temas = temas_ataque if datos.tipo == "ataque" else temas_defensa
+    tema_nivel = temas.get(datos.nivel, temas[1])
+
+    complejidad = (
+        "muy guiado, conceptos simples, sin ambigüedad" if datos.nivel <= 2 else
+        "dificultad media, el estudiante debe aplicar lo aprendido sin que se le indique exactamente qué hacer" if datos.nivel <= 4 else
+        "alta dificultad, múltiples decisiones, escenario realista y ambiguo" if datos.nivel <= 6 else
+        "máxima complejidad, end-to-end sin guía, el estudiante opera de forma completamente autónoma"
+    )
+
+    prompt = (
+        f"Eres un docente universitario experto en ciberseguridad. Crea el contenido para un ejercicio práctico de laboratorio del sistema CyberLab.\n\n"
+        f"CONTEXTO IMPORTANTE: Los estudiantes ya han leído toda la teoría del nivel en la sección 'Información', que incluye comandos, herramientas y procedimientos. "
+        f"Tu tarea es crear un ESCENARIO REALISTA que los obligue a aplicar ese conocimiento. "
+        f"NO debes incluir comandos específicos, instrucciones paso a paso ni nombres de herramientas en el contenido generado. "
+        f"El ejercicio debe plantear una SITUACIÓN que el estudiante debe resolver usando lo que aprendió.\n\n"
+        f"Título del ejercicio: {datos.titulo}\n"
+        f"Tipo: {tipo_label}\n"
+        f"Nivel {datos.nivel} — Tema: {tema_nivel}\n"
+        f"Complejidad esperada: {complejidad}\n"
+        f"Número de puntos/objetivos a evaluar: {datos.num_puntos}\n\n"
+        f"Responde EXACTAMENTE en este formato JSON (sin markdown, sin texto extra fuera del JSON):\n"
+        f'{{"descripcion":"...","instrucciones":"...","items":["objetivo 1","objetivo 2",...]}}\n\n'
+        f"REGLAS ESTRICTAS:\n"
+        f"- descripcion: 1-2 oraciones describiendo el ESCENARIO o PROBLEMA a resolver, sin mencionar herramientas ni comandos.\n"
+        f"- instrucciones: 2-4 oraciones de CONTEXTO adicional del escenario (qué ocurrió, qué se espera del estudiante), sin revelar cómo hacerlo.\n"
+        f"- items: exactamente {datos.num_puntos} OBJETIVOS observables que el estudiante debe lograr (qué debe identificar, detectar, bloquear, analizar o documentar), redactados como resultados esperados, NO como pasos ni comandos.\n"
+        f"Todo en español. El nivel de complejidad del escenario debe reflejar el nivel {datos.nivel} indicado."
+    )
+    try:
+        resp = cliente_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600,
+            temperature=0.7,
+        )
+        import json as _json
+        contenido = resp.choices[0].message.content.strip()
+        data = _json.loads(contenido)
+        return {
+            "descripcion": data.get("descripcion", ""),
+            "instrucciones": data.get("instrucciones", ""),
+            "items": data.get("items", []),
+        }
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=f"Error al generar con IA: {str(ex)}")
+
+
+@app.get("/ejercicios-docente/{ejercicio_id}")
+def detalle_ejercicio_docente(
+    ejercicio_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
+    if not ej:
+        raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+    creador = bd.query(Usuario).filter(Usuario.id == ej.creado_por_id).first()
+    return {
+        "id": ej.id,
+        "titulo": ej.titulo,
+        "descripcion": ej.descripcion,
+        "instrucciones": ej.instrucciones,
+        "activo": ej.activo,
+        "creado_por": creador.nombre_usuario if creador else "desconocido",
+        "fecha_creacion": ej.fecha_creacion.isoformat() if ej.fecha_creacion else None,
+        "items": [{"id": it.id, "descripcion": it.descripcion, "orden": it.orden} for it in ej.items],
+    }
+
+
+@app.delete("/ejercicios-docente/{ejercicio_id}")
+def eliminar_ejercicio_docente(
+    ejercicio_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
+    if not ej:
+        raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+    ej.activo = False
+    bd.commit()
+    return {"mensaje": "Ejercicio eliminado"}
+
+
+@app.post("/ejercicios-docente/{ejercicio_id}/entregar")
+def entregar_ejercicio_docente(
+    ejercicio_id: int,
+    datos: SolicitudEntregarEjercicio,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id, EjercicioDocente.activo == True).first()
+    if not ej:
+        raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+    entrega_existente = bd.query(EntregaEjercicioDocente).filter(
+        EntregaEjercicioDocente.ejercicio_id == ejercicio_id,
+        EntregaEjercicioDocente.usuario_id == usuario_actual.id,
+    ).first()
+    if entrega_existente:
+        entrega_existente.respuesta = datos.respuesta
+        entrega_existente.estado = "entregado"
+        entrega_existente.ayudas_pedidas = datos.ayudas_pedidas
+        bd.commit()
+        return {"mensaje": "Entrega actualizada", "id": entrega_existente.id}
+    entrega = EntregaEjercicioDocente(
+        ejercicio_id=ejercicio_id,
+        usuario_id=usuario_actual.id,
+        respuesta=datos.respuesta,
+        ayudas_pedidas=datos.ayudas_pedidas,
+    )
+    bd.add(entrega)
+    bd.commit()
+    bd.refresh(entrega)
+    return {"mensaje": "Ejercicio entregado", "id": entrega.id}
+
+
+@app.get("/ejercicios-docente/{ejercicio_id}/entregas")
+def listar_entregas_ejercicio(
+    ejercicio_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.ejercicio_id == ejercicio_id).all()
+    resultado = []
+    for en in entregas:
+        u = bd.query(Usuario).filter(Usuario.id == en.usuario_id).first()
+        resultado.append({
+            "id": en.id,
+            "ejercicio_id": en.ejercicio_id,
+            "usuario": u.nombre_usuario if u else "desconocido",
+            "respuesta": en.respuesta,
+            "estado": en.estado,
+            "nota": en.nota,
+            "comentarios_docente": en.comentarios_docente,
+            "ayudas_pedidas": en.ayudas_pedidas or 0,
+            "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+        })
+    return resultado
+
+
+@app.get("/docente/estudiante/{nombre_usuario}/entregas")
+def listar_entregas_estudiante(
+    nombre_usuario: str,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    u = bd.query(Usuario).filter(Usuario.nombre_usuario == nombre_usuario).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
+    # Mapa de id → número correlativo (ordenado por fecha de creación)
+    todos_ejs = bd.query(EjercicioDocente).filter(EjercicioDocente.activo == True).order_by(EjercicioDocente.fecha_creacion.asc()).all()
+    numero_por_id = {ej.id: idx for idx, ej in enumerate(todos_ejs, start=1)}
+
+    entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == u.id).all()
+    resultado = []
+    for en in entregas:
+        ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == en.ejercicio_id).first()
+        resultado.append({
+            "id": en.id,
+            "ejercicio_id": en.ejercicio_id,
+            "numero_ejercicio": numero_por_id.get(en.ejercicio_id),
+            "titulo_ejercicio": ej.titulo if ej else None,
+            "descripcion_ejercicio": ej.descripcion if ej else None,
+            "nivel": ej.nivel if ej else 1,
+            "tipo": ej.tipo if ej else None,
+            "respuesta": en.respuesta,
+            "estado": en.estado,
+            "nota": en.nota,
+            "comentarios_docente": en.comentarios_docente,
+            "ayudas_pedidas": en.ayudas_pedidas or 0,
+            "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+        })
+    return resultado
+
+
+@app.get("/ejercicios-docente/mis-entregas/todas")
+def mis_entregas(
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == usuario_actual.id).all()
+    resultado = []
+    for en in entregas:
+        resultado.append({
+            "id": en.id,
+            "ejercicio_id": en.ejercicio_id,
+            "estado": en.estado,
+            "nota": en.nota,
+            "comentarios_docente": en.comentarios_docente,
+            "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+        })
+    return resultado
+
+
+@app.post("/ejercicios-docente/entregas/{entrega_id}/evaluar")
+def evaluar_entrega_ejercicio(
+    entrega_id: int,
+    datos: SolicitudEvaluarEntrega,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    if datos.nota < 1.0 or datos.nota > 7.0:
+        raise HTTPException(status_code=400, detail="Nota debe estar entre 1.0 y 7.0")
+    entrega = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.id == entrega_id).first()
+    if not entrega:
+        raise HTTPException(status_code=404, detail="Entrega no encontrada")
+    from datetime import datetime, timezone
+    entrega.nota = datos.nota
+    entrega.comentarios_docente = datos.comentarios
+    entrega.estado = "evaluado"
+    entrega.fecha_evaluacion = datetime.now(timezone.utc)
+    bd.commit()
+
+    # Notificar al estudiante que su entrega fue evaluada
+    estudiante = bd.query(Usuario).filter(Usuario.id == entrega.usuario_id).first()
+    ejercicio_doc = bd.query(EjercicioDocente).filter(EjercicioDocente.id == entrega.ejercicio_id).first()
+    if estudiante and estudiante.correo and ejercicio_doc:
+        correo_nota_asignada(
+            destinatario=estudiante.correo,
+            nombre_estudiante=estudiante.nombre or estudiante.nombre_usuario,
+            titulo_ejercicio=ejercicio_doc.titulo,
+            nota=datos.nota,
+            comentarios=datos.comentarios,
+        )
+
+    return {"mensaje": "Entrega evaluada"}

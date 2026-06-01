@@ -432,7 +432,7 @@ def iniciar_sistema():
         bd.execute(text("CREATE UNIQUE INDEX uq_entrega_ejercicio_usuario ON entregas_ejercicio_docente(ejercicio_id, usuario_id)"))
         bd.commit()
     except Exception:
-        pass
+        bd.rollback()
     sembrar_contenido_si_falta(bd)
     seed_plantillas(bd)
     bd.close()

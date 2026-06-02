@@ -457,7 +457,7 @@ def health():
 # ── Test email (GET público para diagnóstico) ──────────────────────
 @app.get("/auth/test-email")
 def test_email():
-    from .email_utils import _enviar_sync, SMTP_USER, SMTP_PASS
+    from .email_utils import _enviar_sync, SENDGRID_API_KEY
     destino = "vidal.diaz.ignacio@gmail.com"
     try:
         _enviar_sync(
@@ -466,10 +466,10 @@ def test_email():
             html="<p>Si ves esto, el sistema de correos funciona correctamente. ✅</p>"
         )
         return {"ok": True, "mensaje": f"Correo enviado a {destino}",
-                "smtp_user_set": bool(SMTP_USER), "smtp_pass_set": bool(SMTP_PASS)}
+                "sendgrid_api_key_set": bool(SENDGRID_API_KEY)}
     except Exception as e:
         return {"ok": False, "error": str(e),
-                "smtp_user_set": bool(SMTP_USER), "smtp_pass_set": bool(SMTP_PASS)}
+                "sendgrid_api_key_set": bool(SENDGRID_API_KEY)}
 
 
 # ── Auth ──────────────────────────────────────────────────────────

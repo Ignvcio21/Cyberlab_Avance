@@ -1,37 +1,43 @@
 """
 email_utils.py — Envío de correos transaccionales de CyberLab
-Usa Gmail SMTP con SSL (puerto 465) — compatible con Railway.
+Usa SendGrid API (HTTP) — compatible con Railway.
 Variables de entorno requeridas:
-  SMTP_USER  correo Gmail remitente
-  SMTP_PASS  contraseña de aplicación de Google (16 caracteres)
-  APP_URL    URL pública del frontend
+  SENDGRID_API_KEY  API key de SendGrid
+  APP_URL           URL pública del frontend
 """
 import os
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+import urllib.request
+import json
 from concurrent.futures import ThreadPoolExecutor
 
 _executor = ThreadPoolExecutor(max_workers=3)
 
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+EMAIL_FROM = "vidal.diaz.ignacio@gmail.com"
+EMAIL_FROM_NAME = "CyberLab"
 APP_URL = os.getenv("APP_URL", "https://cyberlabavance.vercel.app")
 
 
 def _enviar_sync(to: str, subject: str, html: str):
-    if not SMTP_USER or not SMTP_PASS:
+    if not SENDGRID_API_KEY:
         return
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = f"CyberLab <{SMTP_USER}>"
-    msg["To"] = to
-    msg.attach(MIMEText(html, "html", "utf-8"))
-    ctx = ssl.create_default_context()
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=10) as server:
-        server.login(SMTP_USER, SMTP_PASS)
-        server.sendmail(SMTP_USER, to, msg.as_string())
+    payload = json.dumps({
+        "personalizations": [{"to": [{"email": to}]}],
+        "from": {"email": EMAIL_FROM, "name": EMAIL_FROM_NAME},
+        "subject": subject,
+        "content": [{"type": "text/html", "value": html}],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.status
 
 
 def enviar_correo(to: str, subject: str, html: str):

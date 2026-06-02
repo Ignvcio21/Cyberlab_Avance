@@ -450,7 +450,8 @@ def raiz():
 # ── Health check ──────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    import os
+    return {"status": "ok", "secret_key_prefix": os.environ.get("SECRET_KEY","")[:8]}
 
 
 # ── Test email (solo admin) ────────────────────────────────────────

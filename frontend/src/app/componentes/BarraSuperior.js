@@ -9,7 +9,7 @@ export default function BarraSuperior({ paginaActiva }) {
   const [rolUsuario, setRolUsuario] = useState("")
 
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario") || ""
+    const u = localStorage.getItem("nombre_display") || localStorage.getItem("nombre_usuario") || ""
     const r = localStorage.getItem("rol_usuario") || ""
     setNombreUsuario(u)
     setRolUsuario(r)
@@ -19,6 +19,7 @@ export default function BarraSuperior({ paginaActiva }) {
 
   const salir = () => {
     localStorage.removeItem("nombre_usuario")
+    localStorage.removeItem("nombre_display")
     localStorage.removeItem("rol_usuario")
     localStorage.removeItem("token")
     router.push("/")
@@ -69,6 +70,7 @@ export default function BarraSuperior({ paginaActiva }) {
         >
           Información
         </button>
+
 
         {puedeVerNotas && (
           <button

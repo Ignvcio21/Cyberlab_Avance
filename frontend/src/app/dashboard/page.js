@@ -529,6 +529,26 @@ export default function Dashboard() {
   const [modalProg,     setModalProg]     = useState(0)
   const [modalAbierto,  setModalAbierto]  = useState(false)
   const [modalReporte,  setModalReporte]  = useState(false)
+  const [bannerVisible, setBannerVisible] = useState(true)
+
+  // ── Modo ejercicios docente ──
+  const [ejerciciosDocente,   setEjerciciosDocente]   = useState([])
+  const [ejDocenteActivo,     setEjDocenteActivo]     = useState(null)
+  const [checklistManual,     setChecklistManual]     = useState({})
+  const [timerDocente,        setTimerDocente]        = useState(0)
+  const [timerDocenteActivo,  setTimerDocenteActivo]  = useState(false)
+  const [ayudasDocente,       setAyudasDocente]       = useState(0)
+  const [pistaDocente,        setPistaDocente]        = useState("")
+  const [mostrarPista,        setMostrarPista]        = useState(false)
+  const [cargandoPista,       setCargandoPista]       = useState(false)
+  const [nivelDocenteAbierto, setNivelDocenteAbierto] = useState(1)
+  const modoDocente = true  // siempre mostrar panel de niveles
+  const [confirmEjDocente,     setConfirmEjDocente]     = useState(null)
+  const [popupFin,             setPopupFin]             = useState(false)
+  const [popupFinPct,          setPopupFinPct]          = useState(100)
+  const [ejerciciosEntregados,    setEjerciciosEntregados]    = useState(new Set())
+  const [entregadosCargados,      setEntregadosCargados]      = useState(false)
+  const yaEntregandoRef = useRef(false)  // evita doble submit en el mismo ejercicio
 
   const claveLS = useMemo(() => nombreUsuario ? `cyberlab_progreso_${nombreUsuario}` : null, [nombreUsuario])
 
@@ -617,50 +637,25 @@ export default function Dashboard() {
     } catch { setStats(p => ({ ...p, eventos_recientes: [], alertas_recientes: [] })) }
   }
 
-  // Carga progreso real desde backend
+  // Carga progreso real desde backend usando el endpoint de laboratorio (válido para estudiantes)
   const cargarProgresoDesdeBackend = async (usuario) => {
     try {
-      const r2 = await fetch(`${API_URL}/docente/intentos?nombre_usuario_docente=${encodeURIComponent(usuario)}`, {
+      const r = await fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}`, {
         headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
       })
-      if (!r2.ok) return
-      const d2   = await r2.json()
-      const todos = Array.isArray(d2) ? d2 : (d2?.intentos || [])
-      const aprobados = todos.filter(it => it.estado === "aprobado" && it.usuario === usuario)
-
-      const r3 = await fetch(`${API_URL}/contenido/estructura`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
-      })
-      if (!r3.ok) return
-      const d3   = await r3.json()
-      const mapEjNivel = {}  // ejercicio_id -> nivel (1-7)
-
-      ;(d3?.cursos || []).forEach(curso => {
-        curso.capitulos?.forEach((cap, ci) => {
-          const niv = ci + 1
-          cap.lecciones?.forEach(lec => {
-            lec.ejercicios?.forEach(ej => { mapEjNivel[ej.id] = niv })
-          })
-        })
-      })
-
-      // Contar completados por nivel
-      const conteo = { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0 }
-      aprobados.forEach(it => {
-        const niv = mapEjNivel[it.ejercicio_id]
-        if (niv && conteo[niv] !== undefined) conteo[niv]++
-      })
+      if (!r.ok) return
+      const d = await r.json()
+      const detalle = d?.detalle || {}
 
       setEjercicios(prev => {
         const nuevo = { ...prev }
-        Object.keys(conteo).forEach(n => {
-          const nNum = parseInt(n)
-          const comp = Math.min(conteo[n], TOTAL_EJ)
-          nuevo[nNum] = {
-            actual:      Math.min(comp + 1, TOTAL_EJ),
-            completados: comp,
-          }
-        })
+        for (let n = 1; n <= 7; n++) {
+          const info = detalle[String(n)]
+          if (!info) continue
+          const comp = Math.min(info.completados || 0, TOTAL_EJ)
+          nuevo[n] = { actual: Math.min(comp + 1, TOTAL_EJ), completados: comp }
+        }
+        guardarLS({ ejercicios: nuevo })
         return nuevo
       })
     } catch (e) { console.warn("No se pudo cargar progreso del backend:", e) }
@@ -859,7 +854,7 @@ export default function Dashboard() {
     const nuevoTexto = textoPorChecklist(nuevoCL, textoEsc)
     setTextoEsc(nuevoTexto)
     guardarLS({ checklist: nuevoCL, estadoEsc: completo ? "resuelto" : "iniciado", textoEsc: nuevoTexto })
-    if (completo) { await registrarIntento(); avanzar() }
+    if (completo) { await registrarIntento(); avanzar(); setPopupFin(true) }
   }
 
   const ejecutarComando = async e => {
@@ -886,6 +881,7 @@ export default function Dashboard() {
       if (valido && sal !== "__LIMPIAR__" && !String(sal).toLowerCase().includes("command not found"))
         setCmdValidos(p => [...p, cmd])
       await actualizarTrasComando(cmdN, sal)
+      actualizarChecklistDocente(cmdN, sal)
       await cargarStats()
     } catch {
       setHistorial(p => [...p, prompt, "Error: no se pudo conectar con la terminal."])
@@ -948,6 +944,29 @@ export default function Dashboard() {
     }
     cargarProgresoDesdeBackend(nombreUsuario)
     cargarProgresoLecturaDesdeBackend(nombreUsuario)
+    // Cargar ejercicios ya entregados desde el backend (fuente de verdad)
+    fetch(`${API_URL}/mis-entregas-docente`, { headers: getAuthHeaders() })
+      .then(r => r.json())
+      .then(d => {
+        if (Array.isArray(d?.ejercicio_ids)) {
+          setEjerciciosEntregados(new Set(d.ejercicio_ids))
+        }
+      }).catch(() => {})
+      .finally(() => setEntregadosCargados(true))
+    // Restaurar ejercicio docente activo si había uno en progreso
+    try {
+      const saved = JSON.parse(localStorage.getItem(`cyberlab_ej_docente_${nombreUsuario}`) || "null")
+      if (saved?.ej && saved?.checklist && !saved?.entregado) {
+        setEjDocenteActivo(saved.ej)
+        setChecklistManual(saved.checklist)
+        setAyudasDocente(saved.ayudas || 0)
+        setTimerDocente(saved.timerRestante || (saved.ej.tiempo_minutos || 10) * 60)
+        setTimerDocenteActivo(saved.timerRestante > 0)
+      }
+    } catch {}
+    // Cargar ejercicios del docente para modo ataque
+    fetch(`${API_URL}/ejercicios-docente/tipo/ataque`, { headers: getAuthHeaders() })
+      .then(r => r.json()).then(d => { if (Array.isArray(d)) setEjerciciosDocente(d) }).catch(() => {})
     const iv = setInterval(cargarStats, 3000)
     return () => clearInterval(iv)
   }, [nombreUsuario])
@@ -968,8 +987,173 @@ export default function Dashboard() {
     return () => clearInterval(iv)
   }, [inicioEsc, estadoEsc, checklist])
 
+  // Timer para ejercicios docente + persistencia cada tick
+  useEffect(() => {
+    if (!timerDocenteActivo || !ejDocenteActivo) return
+    const iv = setInterval(() => {
+      setTimerDocente(p => {
+        const next = p <= 1 ? 0 : p - 1
+        // Persistir estado del ejercicio en cada tick
+        try {
+          const saved = JSON.parse(localStorage.getItem(`cyberlab_ej_docente_${localStorage.getItem("nombre_usuario")}`) || "{}")
+          localStorage.setItem(`cyberlab_ej_docente_${localStorage.getItem("nombre_usuario")}`, JSON.stringify({ ...saved, timerRestante: next }))
+        } catch {}
+        if (next <= 0) clearInterval(iv)
+        return next
+      })
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [timerDocenteActivo, ejDocenteActivo])
+
+  // Auto-submit cuando el timer docente llega a 0
+  useEffect(() => {
+    if (timerDocente !== 0 || !ejDocenteActivo || timerDocenteActivo) return
+    const pct = Math.round(Object.values(checklistManual).filter(Boolean).length / Math.max(Object.keys(checklistManual).length, 1) * 100)
+    setTimerDocenteActivo(false)
+    if (!yaEntregandoRef.current) {
+      yaEntregandoRef.current = true
+      fetch(`${API_URL}/ejercicios-docente/${ejDocenteActivo.id}/entregar`, {
+        method: "POST", headers: getAuthHeaders(),
+        body: JSON.stringify({ respuesta: `Tiempo agotado. Progreso: ${pct}%. Ayudas: ${ayudasDocente}`, ayudas_pedidas: ayudasDocente }),
+      }).catch(() => {})
+      setEjerciciosEntregados(prev => new Set([...prev, ejDocenteActivo.id]))
+      try {
+        localStorage.setItem(`cyberlab_ej_docente_${localStorage.getItem("nombre_usuario")}`, JSON.stringify({ ej: ejDocenteActivo, checklist: checklistManual, ayudas: ayudasDocente, timerRestante: 0, entregado: true }))
+      } catch {}
+    }
+    setPopupFinPct(pct)
+    setPopupFin(true)
+    setTimeout(() => cargarProgresoDesdeBackend(localStorage.getItem("nombre_usuario")), 1500)
+  }, [timerDocente, timerDocenteActivo])
+
+  // Detecta si un comando completa un ítem según palabras clave en su descripción
+  const itemCompletadoPorComando = (descripcion, cmdNorm) => {
+    const d = descripcion.toLowerCase()
+    const c = cmdNorm.toLowerCase()
+    const reglas = [
+      { kw: ["nmap","escaneo tcp","syn","tcp syn"],          cmds: ["nmap"] },
+      { kw: ["hosts activos","hosts","ping sweep","descubrir hosts"], cmds: ["nmap","ping","arp","show hosts"] },
+      { kw: ["puertos abiertos","puertos","port scan"],      cmds: ["nmap","scan ports","nmap -p","nmap -ss","nmap -st"] },
+      { kw: ["servicios expuesto","servicio expuesto","servicios innecesari","expuesto innecesari","servicio innecesari"], cmds: ["show services","enumerate services","nmap"] },
+      { kw: ["servicios","service","versión","version"],     cmds: ["nmap -sv","nmap","enumerate services","show services"] },
+      { kw: ["vulnerabilidades","vulnerabilidad","vuln","puntos débiles","punto débil","debilidad","debilidades","configuración de red","configuracion de red"], cmds: ["show vulnerabilities","nmap","scan ports","show banners"] },
+      { kw: ["reforzar","fortalecer","mitigar","mitigación","hardening","medidas de seguridad","medidas para","proponer medidas","mejorar la seguridad","incrementar la seguridad"], cmds: ["block ip","show vulnerabilities","show banners","show services"] },
+      { kw: ["documentar","reporte","informe","evidencia","hallazgo","soluciones propuestas","registrar"], cmds: ["export","report","export report"] },
+      { kw: ["bloquear","bloqueo","firewall","deny","contener","contención"],  cmds: ["block ip","iptables","firewall","ufw"] },
+      { kw: ["alertas","alerta","ids"],                      cmds: ["show alerts","alert"] },
+      { kw: ["eventos","evento","log"],                      cmds: ["show events","log","journalctl"] },
+      { kw: ["tráfico","trafico","sniff","captura"],         cmds: ["show traffic","tcpdump","wireshark","tshark"] },
+      { kw: ["usuarios","usuario","cuentas","cuenta","configuración de la cuenta","account"], cmds: ["show users","enumerate users","whoami","cat /etc/passwd"] },
+      { kw: ["sesiones","sesión","conexiones activas"],      cmds: ["show sessions","netstat","ss -"] },
+      { kw: ["procesos","proceso","running"],                cmds: ["show processes","ps aux","ps -"] },
+      { kw: ["banner","versión servicio","versiones de servicio","información de versión"], cmds: ["show banners","nc ","netcat","banner"] },
+      { kw: ["interfaz","interfaces","ip address","dirección ip"], cmds: ["ip a","ifconfig","ipconfig"] },
+      { kw: ["intentos fallidos","bruteforce","fuerza bruta"], cmds: ["show failed","failed logins","auth.log"] },
+      { kw: ["correos","correo electrónico","email","bandeja","inbox","mail"], cmds: ["show alerts","show events","show traffic"] },
+      { kw: ["phishing","enlace malicioso","enlaces maliciosos","malware","malicioso"], cmds: ["show alerts","show events","show traffic"] },
+      { kw: ["accesos no autorizados","acceso no autorizado","inicio de sesión","login reciente","actividad reciente"], cmds: ["show sessions","show failed logins","show events"] },
+      { kw: ["reconocimiento","reconocer","mapear","mapeo","identificar red","identificar host","identificar serv"], cmds: ["show hosts","scan ports","enumerate services","show services","nmap"] },
+    ]
+    for (const r of reglas) {
+      if (r.kw.some(k => d.includes(k)) && r.cmds.some(cmd => c.includes(cmd))) return true
+    }
+    return false
+  }
+
+  // Llama a la IA para obtener una pista sobre el ítem actual sin completar
+  const pedirPistaDocente = async () => {
+    if (!ejDocenteActivo || cargandoPista) return
+    const itemPendiente = ejDocenteActivo.items.find(it => !checklistManual[it.id])
+    if (!itemPendiente) return
+    setCargandoPista(true)
+    const nuevasAyudas = ayudasDocente + 1
+    setAyudasDocente(nuevasAyudas)
+    try {
+      const r = await fetch(`${API_URL}/terminal`, {
+        method: "POST", headers: getAuthHeaders(),
+        body: JSON.stringify({
+          nombre_usuario: nombreUsuario,
+          comando: `hint: Estoy en un ejercicio de ciberseguridad. El paso que debo completar es: "${itemPendiente.descripcion}". Dame una pista corta (máximo 2 líneas) sobre qué comando o herramienta usar, sin revelar la solución exacta.`
+        })
+      })
+      const d = await r.json()
+      const pista = d?.salida ?? "Analiza el contexto del ejercicio y piensa qué herramienta corresponde a este paso."
+      setPistaDocente(pista)
+      setMostrarPista(true)
+    } catch {
+      setPistaDocente("Revisa el contexto del ejercicio e identifica qué herramienta de Kali Linux corresponde a este paso.")
+      setMostrarPista(true)
+    } finally {
+      setCargandoPista(false)
+    }
+  }
+
+  const iniciarEjDocente = (ej) => {
+    const cl = {}
+    ej.items.forEach(it => { cl[it.id] = false })
+    setEjDocenteActivo(ej)
+    setChecklistManual(cl)
+    setAyudasDocente(0)
+    setPistaDocente("")
+    setMostrarPista(false)
+    const secs = (ej.tiempo_minutos || 10) * 60
+    setTimerDocente(secs)
+    setTimerDocenteActivo(true)
+    yaEntregandoRef.current = false
+    // Persistir ejercicio activo
+    const u = localStorage.getItem("nombre_usuario")
+    try { localStorage.setItem(`cyberlab_ej_docente_${u}`, JSON.stringify({ ej, checklist: cl, ayudas: 0, timerRestante: secs, entregado: false })) } catch {}
+    setHistorial(["CyberLab Terminal — modo kali-like", `Ejercicio iniciado: ${ej.titulo}`, "Usa la terminal para explorar. Los puntos se completan automáticamente al ejecutar los comandos correctos."])
+  }
+
+  // Auto-completar ítems según el comando ejecutado
+  const actualizarChecklistDocente = (cmdNorm, salida) => {
+    if (!ejDocenteActivo) return
+    if (String(salida).toLowerCase().includes("command not found")) return
+    setChecklistManual(prev => {
+      const nuevo = { ...prev }
+      let cambio = false
+      ejDocenteActivo.items.forEach(it => {
+        if (!nuevo[it.id] && itemCompletadoPorComando(it.descripcion, cmdNorm)) {
+          nuevo[it.id] = true
+          cambio = true
+        }
+      })
+      if (!cambio) return prev
+      const completo = Object.values(nuevo).every(Boolean)
+      // Persistir checklist actualizado
+      const u = localStorage.getItem("nombre_usuario")
+      try {
+        const saved = JSON.parse(localStorage.getItem(`cyberlab_ej_docente_${u}`) || "{}")
+        localStorage.setItem(`cyberlab_ej_docente_${u}`, JSON.stringify({ ...saved, checklist: nuevo, entregado: completo || saved.entregado }))
+      } catch {}
+      if (completo && !yaEntregandoRef.current) {
+        yaEntregandoRef.current = true
+        setTimerDocenteActivo(false)
+        const tiempoUsado = (ejDocenteActivo.tiempo_minutos * 60) - timerDocente
+        fetch(`${API_URL}/ejercicios-docente/${ejDocenteActivo.id}/entregar`, {
+          method: "POST", headers: getAuthHeaders(),
+          body: JSON.stringify({
+            respuesta: `Completado vía terminal. Tiempo: ${tiempoUsado}s. Ayudas pedidas: ${ayudasDocente}`,
+            ayudas_pedidas: ayudasDocente,
+          }),
+        }).catch(() => {})
+        setEjerciciosEntregados(prev => new Set([...prev, ejDocenteActivo.id]))
+        setPopupFinPct(100)
+        setPopupFin(true)
+        setTimeout(() => cargarProgresoDesdeBackend(localStorage.getItem("nombre_usuario")), 1500)
+      }
+      return nuevo
+    })
+  }
+
+  const pctDocente = ejDocenteActivo
+    ? Math.round(Object.values(checklistManual).filter(Boolean).length / Math.max(Object.keys(checklistManual).length, 1) * 100)
+    : 0
+
   const fmt    = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
-  const cTimer = tiempoRest <= 60 ? "#ef4444" : tiempoRest <= 120 ? "#f59e0b" : "#00daf3"
+  const cTimer = tiempoRest <= 60 ? "#ff453a" : tiempoRest <= 120 ? "#ff9f0a" : null
+  const timerClass = tiempoRest <= 60 ? "danger" : tiempoRest <= 120 ? "warning" : ""
 
   return (
     <div className="dashboard-page">
@@ -977,239 +1161,269 @@ export default function Dashboard() {
 
         <BarraSuperior paginaActiva="laboratorio" />
 
-        {/* Header */}
-        <header className="hero-panel">
-          <div className="hero-left">
-            <div className="hero-badge">CENTRO DE OPERACIONES CYBERLAB</div>
-            <h1 style={{ margin:"8px 0 4px", fontSize:22, color:"#fff", fontFamily:"var(--sans)", fontWeight:700 }}>
-              Panel de Ciberseguridad
-            </h1>
-            <p className="hero-subtitle">
-              Operador activo: <strong style={{ color:"var(--primario-dim)" }}>{nombreUsuario}</strong>
-            </p>
-            <div className="hero-meta">
-              <span className="meta-chip">⏱ Sesión: {tiempoSes}s</span>
-              <span className="meta-chip">
-                Nivel {nivelActivo}: {NIVELES_EJERCICIOS[nivelActivo]?.nombre} — Ej. {ejActual}/5
-              </span>
-              {ayudas > 0 && (
-                <span className="meta-chip meta-chip-warn">
-                  ⚠ Ayudas: {ayudas} (-{Math.min(ayudas * 5, 30)}%)
-                </span>
+        {/* ── BANNER ejercicio activo ── */}
+        {estadoEsc !== "inactivo" && bannerVisible && (
+          <div className={`banner${estadoEsc === "resuelto" ? " resolved" : ""}`}>
+            <span className="banner-icon">{estadoEsc === "resuelto" ? "✅" : "🔔"}</span>
+            <div>
+              {estadoEsc === "resuelto" ? (
+                <><strong>¡Ejercicio completado!</strong> Nivel {nivelActivo} — Ej. {ejercicios[nivelActivo]?.actual || ejActual}/5. Genera el reporte para guardar tu resultado.</>
+              ) : (
+                <><strong>Ejercicio activo:</strong> Nivel {nivelActivo} — Ejercicio {ejActual}/5. El timer está corriendo. Tienes <strong>{fmt(tiempoRest)}</strong> restantes.
+                {ayudas > 0 && <span style={{ color:"#ff9f0a", marginLeft:8 }}>⚠ {ayudas} ayuda{ayudas > 1 ? "s" : ""} usada{ayudas > 1 ? "s" : ""} (-{Math.min(ayudas*5,30)}%)</span>}</>
               )}
             </div>
+            <button className="banner-close" onClick={() => setBannerVisible(false)}>✕</button>
           </div>
-          <button onClick={() => {
-            localStorage.removeItem("nombre_usuario"); localStorage.removeItem("rol_usuario")
-            localStorage.removeItem("token")
-            if (claveLS) localStorage.removeItem(claveLS); router.push("/")
-          }} className="logout-button">Cerrar sesión</button>
+        )}
+
+        {/* ── PAGE HEADER ── */}
+        <header style={{ marginBottom: 4, display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
+          <div>
+            <h1 style={{ margin:"0 0 4px", fontSize:32, fontWeight:800, letterSpacing:"-1px", color:"#f5f5f7", lineHeight:1 }}>
+              Dashboard
+            </h1>
+            <p style={{ margin:0, fontSize:15, color:"#8e8e93" }}>
+              {nombreUsuario && <><strong style={{ color:"#aeaeb2" }}>{nombreUsuario}</strong> · </>}
+              {NIVELES_EJERCICIOS[nivelActivo]?.nombre} · Semana activa
+            </p>
+          </div>
+          {tiempoSes > 0 && (
+            <span style={{ fontFamily:"var(--mono)", fontSize:13, color:"#8e8e93", background:"#1c1c1e", border:"1px solid #2c2c2e", padding:"6px 12px", borderRadius:8, flexShrink:0 }}>
+              ⏱ {tiempoSes}s
+            </span>
+          )}
         </header>
 
-        {/* Progreso por nivel */}
-        <section className="ejercicios-panel">
-          <div className="ejercicios-titulo">Progreso por nivel</div>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:8 }}>
-            {[1,2,3,4,5,6,7].map(n => {
-              const ej   = ejercicios[n] || { actual:1, completados:0 }
-              const desl = !nivelDesbloqueado(n)
-              const activo = nivelActivo === n
-              return (
+        {/* ── STATS — 3 tarjetas ── */}
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16 }}>
+          {[
+            { label:"EVENTOS DETECTADOS", valor: stats.total_eventos, colorClass:"blue",   sub:"show events" },
+            { label:"ALERTAS ACTIVAS",    valor: stats.total_alertas, colorClass:"orange",  sub:"show alerts" },
+            { label:"NIVEL ACTIVO",       valor: `${nivelActivo}/7`,  colorClass:"green",   sub:`Ej. ${ejActual} de 5` },
+          ].map(({ label, valor, colorClass, sub }) => (
+            <div key={label} className="stat-card-mock">
+              <div className="stat-label-mock">{label}</div>
+              <div className={`stat-value-mock ${colorClass}`}>{valor}</div>
+              <div className="stat-delta-mock">{sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Niveles de entrenamiento + ejercicios docente ── */}
+        {(() => {
+          const NOMBRES_NIV = {1:"Fundamentos",2:"Reconocimiento",3:"Enumeración",4:"Explotación",5:"Post-exploit",6:"Avanzado",7:"Operación"}
+          const C = {
+            bg:  n => n<=2?"rgba(48,209,88,0.14)":n<=4?"rgba(255,159,10,0.14)":n<=6?"rgba(255,100,50,0.14)":"rgba(255,69,58,0.14)",
+            txt: n => n<=2?"#30d158":n<=4?"#ff9f0a":n<=6?"#ff6332":"#ff453a",
+            brd: n => n<=2?"rgba(48,209,88,0.38)":n<=4?"rgba(255,159,10,0.38)":n<=6?"rgba(255,100,50,0.38)":"rgba(255,69,58,0.38)",
+          }
+          const porNivel = {}
+          ejerciciosDocente.forEach(ej => { const n=ej.nivel||1; if(!porNivel[n]) porNivel[n]=[]; porNivel[n].push(ej) })
+          const n = nivelDocenteAbierto || 1
+          const lista = porNivel[n] || []
+          return (
+            <div className="card-mock">
+              {/* Card header */}
+              <div className="card-mock-header">
+                <div>
+                  <div className="card-mock-title">Niveles de entrenamiento</div>
+                  <div className="card-mock-subtitle">7 niveles · Nivel {nivelActivo} en progreso</div>
+                </div>
+                <span className="card-mock-tag">
+                  {(ejercicios[nivelActivo]?.completados||0)} / 5 completados
+                </span>
+              </div>
+              {/* Levels grid */}
+              <div className="card-mock-body">
+                <div className="levels-grid-mock">
+                  {[1,2,3,4,5,6,7].map(lv => {
+                    const comp   = ejercicios[lv]?.completados || 0
+                    const activo = lv === nivelActivo
+                    const done   = comp >= TOTAL_EJ
+                    const desbloqueado = nivelDesbloqueado(lv)
+                    const pct    = done ? 100 : Math.round(comp / TOTAL_EJ * 100)
+                    return (
+                      <button
+                        key={lv}
+                        className={`level-card-mock${activo ? " active" : done ? " done" : ""}`}
+                        onClick={() => { setNivelActivo(lv); setNivelDocenteAbierto(lv) }}
+                      >
+                        <div className="level-num-mock">{lv}</div>
+                        <div className="level-name-mock">{NOMBRES_NIV[lv]}</div>
+                        <div className="level-progress-mock">
+                          <div className="level-fill-mock" style={{ width: `${pct}%` }} />
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Ejercicios del docente por nivel */}
+                <div style={{ marginTop:16, paddingTop:16, borderTop:"1px solid #2c2c2e" }}>
+                  <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:"#8e8e93", marginBottom:10 }}>
+                    EJERCICIOS DOCENTE — {NOMBRES_NIV[n]}
+                  </div>
+                  {lista.length === 0 ? (
+                    <div style={{ fontSize:13, color:"#8e8e93", textAlign:"center", padding:"10px 0" }}>
+                      El docente aún no ha publicado ejercicios de ataque en este nivel.
+                    </div>
+                  ) : (
+                    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      {lista.map(ej => {
+                        const activo = ejDocenteActivo?.id === ej.id
+                        const entregado = ejerciciosEntregados.has(ej.id)
+                        return (
+                          <button key={ej.id} onClick={() => setConfirmEjDocente(ej)} style={{
+                            textAlign:"left", padding:"11px 14px", borderRadius:10, width:"100%",
+                            border: activo ? "1.5px solid #2997ff" : entregado ? "1px solid rgba(0,218,243,0.30)" : "1px solid #2c2c2e",
+                            background: activo ? "rgba(41,151,255,0.12)" : entregado ? "rgba(0,218,243,0.07)" : "#242426",
+                            color: activo ? "#2997ff" : entregado ? "var(--terciario-dim)" : "#f5f5f7",
+                            cursor:"pointer", transition:"all 0.15s",
+                            display:"flex", alignItems:"center", gap:12,
+                          }}>
+                            <div style={{ flex:1 }}>
+                              <div style={{ fontWeight:700, fontSize:13, marginBottom:2 }}>{ej.titulo}</div>
+                              <div style={{ fontSize:11, color:"#8e8e93" }}>{ej.items.length} punto{ej.items.length!==1?"s":""} · {ej.tiempo_minutos} min</div>
+                            </div>
+                            {activo && <span style={{ fontSize:11, fontWeight:700 }}>▶ Activo</span>}
+                            {!activo && entregado && <span style={{ fontSize:11, fontWeight:700, color:"var(--terciario-dim)" }}>✓ Entregado</span>}
+                            {!activo && !entregado && !entregadosCargados && <span style={{ fontSize:10, color:"#8e8e93" }}>…</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+
+        {/* ── MODO DOCENTE: escenario + checklist ── */}
+        {modoDocente && ejDocenteActivo && (
+          <section className="mission-panel">
+            <div className="panel-header">
+              <h2 style={{ margin:0 }}>{ejDocenteActivo.titulo}</h2>
+              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                {ayudasDocente > 0 && (
+                  <span style={{ fontSize:12, color:"#f59e0b", fontFamily:"var(--mono)" }}>
+                    💡 {ayudasDocente} {ayudasDocente === 1 ? "pista" : "pistas"}
+                  </span>
+                )}
+                <span style={{ fontFamily:"var(--mono)", fontSize:18, fontWeight:700, color: timerDocente <= 60 ? "#ef4444" : timerDocente <= 120 ? "#f59e0b" : "#00daf3" }}>
+                  {fmt(timerDocente)}
+                </span>
+              </div>
+            </div>
+            <pre className="mission-text">{ejDocenteActivo.contexto_generado || ejDocenteActivo.descripcion}</pre>
+            <div className="progress-wrapper">
+              <div className="progress-top">
+                <span style={{ color:"var(--texto-secundario)" }}>Progreso</span>
+                <strong style={{ color: pctDocente === 100 ? "var(--terciario-dim)" : "var(--primario-dim)" }}>{pctDocente}%</strong>
+              </div>
+              <div className="progress-bar">
+                <div className="progress-fill" style={{ width:`${pctDocente}%`, background: pctDocente === 100 ? "var(--terciario)" : "var(--gradiente-principal)" }}/>
+              </div>
+            </div>
+            <div style={{
+              display:"grid",
+              gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",
+              gap:10, marginTop:16
+            }}>
+              {ejDocenteActivo.items.map((it, idx) => {
+                const done = checklistManual[it.id]
+                return (
+                  <div key={it.id} style={{
+                    display:"flex", flexDirection:"column", gap:8,
+                    padding:"12px 14px", borderRadius:12,
+                    border: done ? "1px solid rgba(0,218,243,0.35)" : "1px solid rgba(255,255,255,0.08)",
+                    background: done ? "rgba(0,218,243,0.07)" : "rgba(255,255,255,0.03)",
+                    transition:"all 0.3s",
+                  }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <div style={{
+                        width:26, height:26, borderRadius:"50%", flexShrink:0,
+                        display:"grid", placeItems:"center",
+                        fontSize:12, fontWeight:800, fontFamily:"var(--mono)",
+                        background: done ? "rgba(0,218,243,0.18)" : "rgba(255,255,255,0.06)",
+                        border: done ? "1.5px solid rgba(0,218,243,0.45)" : "1.5px solid rgba(255,255,255,0.12)",
+                        color: done ? "var(--terciario-dim)" : "var(--texto-apagado)",
+                      }}>
+                        {done ? "✓" : idx + 1}
+                      </div>
+                      {done && <span style={{ fontSize:9, fontWeight:800, fontFamily:"var(--mono)", color:"var(--terciario-dim)", letterSpacing:"0.05em", textTransform:"uppercase" }}>Completado</span>}
+                    </div>
+                    <span style={{ fontSize:12, lineHeight:1.5, color: done ? "var(--terciario-dim)" : "var(--texto-secundario)" }}>
+                      {it.descripcion}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+            {/* Botón de pista */}
+            {pctDocente < 100 && (
+              <div style={{ marginTop:12 }}>
                 <button
-                  key={n}
-                  onClick={() => !desl && setNivelActivo(n)}
-                  disabled={desl}
+                  onClick={pedirPistaDocente}
+                  disabled={cargandoPista}
                   style={{
-                    padding:"10px 6px",
-                    borderRadius:10,
-                    border: activo ? "1.5px solid var(--primario)" : "1px solid rgba(255,255,255,0.08)",
-                    background: activo ? "rgba(0,163,255,0.12)" : desl ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
-                    color: desl ? "var(--texto-apagado)" : activo ? "var(--primario-dim)" : "var(--texto-secundario)",
-                    cursor: desl ? "not-allowed" : "pointer",
-                    textAlign:"center", fontSize:11, fontWeight:700,
-                    opacity: desl ? 0.4 : 1, transition:"all .18s",
+                    padding:"8px 16px", borderRadius:8, border:"1px solid rgba(245,158,11,0.4)",
+                    background:"rgba(245,158,11,0.08)", color:"#f59e0b", cursor:"pointer",
+                    fontSize:13, fontWeight:600, opacity: cargandoPista ? 0.6 : 1,
                   }}
                 >
-                  <div style={{ fontSize:16, marginBottom:4 }}>
-                    {desl ? "🔒" : ej.completados >= 5 ? "✅" : `N${n}`}
-                  </div>
-                  <div style={{ fontSize:10, marginBottom:4, fontFamily:"var(--mono)", lineHeight:1.3 }}>
-                    {NIVELES_EJERCICIOS[n]?.nombre}
-                  </div>
-                  <div style={{ fontSize:10, color: ej.completados >= 5 ? "var(--terciario-dim)" : "var(--texto-apagado)", fontFamily:"var(--mono)" }}>
-                    {ej.completados}/5 ej.
-                  </div>
-                  <div style={{ marginTop:5, height:3, borderRadius:999, background:"rgba(255,255,255,0.08)", overflow:"hidden" }}>
-                    <div style={{
-                      height:"100%", borderRadius:999,
-                      background: ej.completados >= 5 ? "var(--terciario)" : "var(--primario)",
-                      width:`${ej.completados / 5 * 100}%`, transition:"width .4s"
-                    }}/>
-                  </div>
+                  {cargandoPista ? "Obteniendo pista..." : "💡 Pedir pista"}
                 </button>
-              )
-            })}
-          </div>
-        </section>
-
-        {/* Objetivo del ejercicio actual */}
-        <section className="learning-panel">
-          <h2 style={{ margin:"0 0 14px" }}>
-            Nivel {nivelActivo} — {NIVELES_EJERCICIOS[nivelActivo]?.nombre}
-          </h2>
-          <div className="learning-grid">
-            <div className="learning-box">
-              <strong style={{ color:"#fff", display:"block", marginBottom:8 }}>
-                {defActual?.titulo || "Inicia una simulación"}
-              </strong>
-              <p style={{ marginTop:0, marginBottom:10, fontSize:13 }}>
-                {defActual?.descripcion || "Selecciona un nivel y ejecuta la simulación."}
-              </p>
-              {defActual && (
-                <ul>
-                  {defActual.checklist.map((p, i) => (
-                    <li key={p} style={{ fontFamily:"var(--mono)", fontSize:12 }}>
-                      {i + 1}. {ETIQUETA_DESC(p)}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="learning-box">
-              <strong style={{ color:"#fff", display:"block", marginBottom:8 }}>Comandos disponibles en este nivel</strong>
-              <ul>
-                {Object.values(POOL).slice(0, 12).map(p => (
-                  <li key={p.cmd}><code>{p.cmd}</code></li>
-                ))}
-              </ul>
-            </div>
-            <div className="learning-box">
-              <strong style={{ color:"#fff", display:"block", marginBottom:8 }}>Contenido del nivel</strong>
-              <p style={{ fontSize:13 }}>Lee el material antes de practicar para entender el contexto técnico.</p>
-              <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:10 }}>
-                {[1,2,3,4,5,6,7].map(n => (
-                  <button
-                    key={n}
-                    className="boton-secundario"
-                    style={{ fontSize:11, padding:"5px 10px" }}
-                    onClick={() => router.push(`/dashboard/informacion?nivel=${n}`)}
-                  >
-                    Nivel {n}
-                  </button>
-                ))}
+                {mostrarPista && pistaDocente && (
+                  <div style={{
+                    marginTop:10, padding:"10px 14px",
+                    background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.25)",
+                    borderRadius:8, fontSize:13, color:"#fbbf24", whiteSpace:"pre-wrap",
+                  }}>
+                    <strong>Pista:</strong> {pistaDocente}
+                    <button onClick={() => setMostrarPista(false)} style={{ marginLeft:12, background:"none", border:"none", color:"#f59e0b", cursor:"pointer", fontSize:13 }}>✕</button>
+                  </div>
+                )}
               </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Simulación */}
-        <section className="action-panel">
-          <h2 style={{ margin:"0 0 4px" }}>Simulación — Nivel {nivelActivo}</h2>
-          <p>Cada ejercicio presenta un escenario distinto con empresa, IP y contexto únicos.</p>
-          <div className="status-box">
-            <span className="status-label">Estado</span>
-            <span className="status-value">{mensaje || "Esperando acción del operador..."}</span>
-          </div>
-          <div className="attack-buttons">
-            <button
-              className="attack-button"
-              onClick={() => {
-                if (!nivelDesbloqueado(nivelActivo)) {
-                  setMensaje(`Completa el Nivel ${nivelActivo - 1} primero.`); return
-                }
-                const p = progresoLectura(nivelActivo)
-                if (p < 100) { setModalNivel(nivelActivo); setModalProg(p); setModalAbierto(true); return }
-                simular()
-              }}
-            >
-              ▶ Iniciar Ejercicio {ejActual}/5 — {NIVELES_EJERCICIOS[nivelActivo]?.nombre}
-            </button>
-            <button className="report-button" onClick={generarReporte}>Generar reporte</button>
-          </div>
-        </section>
-
-        {/* Escenario activo */}
-        <section className="mission-panel">
-          <div className="panel-header">
-            <h2 style={{ margin:0 }}>Escenario activo</h2>
-            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-              <span className="tag" style={{
-                background: estadoEsc==="resuelto" ? "rgba(0,218,243,0.10)" : "rgba(0,163,255,0.10)",
-                color: estadoEsc==="resuelto" ? "var(--terciario-dim)" : "var(--primario-dim)",
-                border:`1px solid ${estadoEsc==="resuelto" ? "rgba(0,218,243,0.25)" : "rgba(0,163,255,0.25)"}`,
-                padding:"3px 10px", borderRadius:4, fontSize:11, fontWeight:700, fontFamily:"var(--mono)"
-              }}>
-                {estadoEsc==="resuelto" ? "✅ RESUELTO" : "⚡ EN PROCESO"}
-              </span>
-              <span style={{ fontFamily:"var(--mono)", fontSize:18, fontWeight:700, color:cTimer }}>
-                {fmt(tiempoRest)}
-              </span>
-              {escenario && estadoEsc !== "resuelto" && (
-                <button className="boton-ayuda" onClick={pedirAyuda} disabled={cargandoAyuda}>
-                  {cargandoAyuda ? "..." : ayudas > 0 ? `💡 Ayuda (${ayudas}x)` : "💡 Pedir ayuda"}
-                </button>
-              )}
-            </div>
-          </div>
-
-          {mostrarHint && hint && (
-            <div className="hint-box">
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-                <strong style={{ color:"#fbbf24", fontSize:12 }}>
-                  💡 Pista #{ayudas} — -{Math.min(ayudas * 5, 30)}% penalización
-                </strong>
-                <button onClick={() => setMostrarHint(false)}
-                  style={{ background:"none", border:"none", color:"var(--texto-apagado)", cursor:"pointer", fontSize:16 }}>
-                  ✕
-                </button>
+            )}
+            {pctDocente === 100 && (
+              <div style={{ marginTop:12, padding:"10px 14px", background:"rgba(0,218,243,0.10)", border:"1px solid rgba(0,218,243,0.25)", borderRadius:8, color:"var(--terciario-dim)", fontWeight:700, fontSize:14 }}>
+                ✅ Ejercicio completado{ayudasDocente > 0 ? ` · ${ayudasDocente} pista${ayudasDocente > 1 ? "s" : ""} usada${ayudasDocente > 1 ? "s" : ""}` : ""}
               </div>
-              <p>{hint}</p>
-            </div>
-          )}
-
-          <pre className="mission-text">{textoEsc}</pre>
-
-          <div className="progress-wrapper">
-            <div className="progress-top">
-              <span style={{ color:"var(--texto-secundario)" }}>Progreso del ejercicio</span>
-              <strong style={{ color:pct===100?"var(--terciario-dim)":"var(--primario-dim)" }}>{pct}%</strong>
-            </div>
-            <div className="progress-bar">
-              <div className="progress-fill" style={{
-                width:`${pct}%`,
-                background: pct===100 ? "var(--terciario)" : "var(--gradiente-principal)"
-              }}/>
-            </div>
-          </div>
-
-          <div className="mission-progress" style={{
-            gridTemplateColumns:`repeat(${Math.min(Object.keys(checklist).length, 4)}, 1fr)`
-          }}>
-            {Object.entries(checklist).map(([k, v]) => (
-              <div key={k} className={`mission-step ${v ? "done" : ""}`}>
-                {v ? "✓" : "○"} {ETIQUETA_DESC(k)}
-              </div>
-            ))}
-          </div>
-        </section>
+            )}
+          </section>
+        )}
 
         {/* Terminal */}
-        <section className="terminal-panel">
-          <div className="panel-header">
-            <h2 style={{ margin:0 }}>Terminal interactiva</h2>
-            <span className="tag cyan-tag">KALI MODE</span>
+        <section style={{ background:"#0d1117", border:"1px solid rgba(57,211,83,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)" }}>
+          {/* Chrome bar */}
+          <div style={{ background:"#161b22", padding:"11px 16px", display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
+            <div style={{ display:"flex", gap:6 }}>
+              <div style={{ width:12, height:12, borderRadius:"50%", background:"#ff5f57" }}/>
+              <div style={{ width:12, height:12, borderRadius:"50%", background:"#febc2e" }}/>
+              <div style={{ width:12, height:12, borderRadius:"50%", background:"#28c840" }}/>
+            </div>
+            <div style={{ flex:1, textAlign:"center", fontFamily:"var(--mono)", fontSize:12, color:"rgba(255,255,255,0.40)" }}>
+              CyberLab Terminal — Simulación activa
+            </div>
+            <div style={{ fontFamily:"var(--mono)", fontSize:11, color:"#39d353", background:"rgba(57,211,83,0.12)", padding:"3px 8px", borderRadius:6, border:"1px solid rgba(57,211,83,0.25)" }}>
+              ● LIVE
+            </div>
           </div>
-          <div className="terminal-window" ref={termRef}>
+          <div className="terminal-window" ref={termRef} style={{ borderRadius:0, borderLeft:"none", borderRight:"none", borderTop:"none" }}>
             {historial.map((l, i) => (
               <div key={i} className={`terminal-line ${l.startsWith("cyberlab@kali") ? "terminal-cmd" : ""}`}>
                 {l}
               </div>
             ))}
           </div>
-          <form onSubmit={ejecutarComando} className="terminal-form">
+          <form onSubmit={ejecutarComando} className="terminal-form" style={{ margin:"0 0 0", borderRadius:"0 0 18px 18px", borderLeft:"none", borderRight:"none", borderBottom:"none", borderTop:"1px solid rgba(57,211,83,0.14)" }}>
             <span className="terminal-prefix">cyberlab@kali:~$</span>
             <input className="terminal-input" value={comando} onChange={e => setComando(e.target.value)}
-              placeholder="Escribe un comando..." autoComplete="off" spellCheck={false}/>
+              placeholder="Escribe un comando..." autoComplete="off" spellCheck={false}
+              style={{ color:"#c9d1d9", caretColor:"#39d353" }}/>
           </form>
         </section>
 
@@ -1223,29 +1437,76 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Stats compactos — sin la lista larga de eventos/alertas */}
-        <section className="panel">
-          <div style={{ display:"flex", gap:20, flexWrap:"wrap", alignItems:"center" }}>
-            <div style={{ display:"flex", gap:14 }}>
-              <div style={{ textAlign:"center", padding:"10px 20px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12 }}>
-                <div style={{ fontSize:28, fontWeight:900, color:"var(--primario-dim)" }}>{stats.total_eventos}</div>
-                <div style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>EVENTOS</div>
-              </div>
-              <div style={{ textAlign:"center", padding:"10px 20px", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12 }}>
-                <div style={{ fontSize:28, fontWeight:900, color:"#ffb4ab" }}>{stats.total_alertas}</div>
-                <div style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>ALERTAS</div>
-              </div>
-            </div>
-            <div style={{ fontSize:12, color:"var(--texto-apagado)" }}>
-              Usa <code style={{ background:"rgba(0,218,243,0.10)", color:"var(--terciario-dim)", padding:"2px 6px", borderRadius:4, fontFamily:"var(--mono)" }}>show events</code> y{" "}
-              <code style={{ background:"rgba(0,218,243,0.10)", color:"var(--terciario-dim)", padding:"2px 6px", borderRadius:4, fontFamily:"var(--mono)" }}>show alerts</code>{" "}
-              en la terminal para ver el detalle.
-            </div>
-          </div>
-        </section>
 
         {/* Mis evaluaciones — visible solo para el estudiante */}
         
+
+        {/* ── Modal confirmación ejercicio docente ── */}
+        {confirmEjDocente && (() => {
+          const yaEntregado = ejerciciosEntregados.has(confirmEjDocente.id)
+          return (
+          <div className="modal-fondo" onClick={() => setConfirmEjDocente(null)}>
+            <div className="modal-tarjeta" style={{ maxWidth:480 }} onClick={e => e.stopPropagation()}>
+              <div className="modal-cabecera">
+                <h3 className="modal-titulo">{yaEntregado ? "📋 Ejercicio entregado" : "⚔ ¿Iniciar ejercicio?"}</h3>
+                <button className="boton-secundario" onClick={() => setConfirmEjDocente(null)}>✕</button>
+              </div>
+              <div className="modal-cuerpo" style={{ display:"grid", gap:16 }}>
+                <div style={{ background:"rgba(41,151,255,0.06)", border:"1px solid rgba(41,151,255,0.20)", borderRadius:14, padding:"18px 20px" }}>
+                  <div style={{ fontSize:11, fontFamily:"var(--mono)", color:"#6db8ff", fontWeight:700, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:8 }}>
+                    Ejercicio de práctica
+                  </div>
+                  <div style={{ fontSize:18, fontWeight:800, color:"#f5f5f7", letterSpacing:"-0.3px", marginBottom:6 }}>
+                    {confirmEjDocente.titulo}
+                  </div>
+                  <div style={{ fontSize:13, color:"#8e8e93", lineHeight:1.5 }}>
+                    {confirmEjDocente.descripcion}
+                  </div>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 }}>
+                  {[
+                    { l:"Tipo",   v: confirmEjDocente.tipo === "ataque" ? "⚔ Ataque" : "🛡 Defensa" },
+                    { l:"Nivel",  v:`Nivel ${confirmEjDocente.nivel || 1}` },
+                    { l:"Tiempo", v:`${confirmEjDocente.tiempo_minutos} min` },
+                  ].map(({ l, v }) => (
+                    <div key={l} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:10, padding:"11px 14px" }}>
+                      <div style={{ fontSize:10, fontFamily:"var(--mono)", color:"#6e6e73", letterSpacing:"0.06em", marginBottom:4 }}>{l}</div>
+                      <div style={{ fontSize:14, fontWeight:700, color:"#f5f5f7" }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {yaEntregado ? (
+                  <div style={{ padding:"14px 18px", background:"rgba(0,218,243,0.08)", border:"1px solid rgba(0,218,243,0.25)", borderRadius:10, fontSize:13, color:"var(--terciario-dim)", fontWeight:600 }}>
+                    ✅ Ya completaste y entregaste este ejercicio. Tu docente lo calificará pronto.
+                  </div>
+                ) : (
+                  <>
+                    <p style={{ margin:0, fontSize:13, color:"#8e8e93", lineHeight:1.6, background:"rgba(255,159,10,0.06)", border:"1px solid rgba(255,159,10,0.18)", borderRadius:10, padding:"10px 14px" }}>
+                      ⚠ Una vez que confirmes, el temporizador comenzará inmediatamente. Solo puedes entregar este ejercicio una vez.
+                    </p>
+                    <div style={{ display:"flex", gap:10 }}>
+                      <button
+                        className="btn-mock-primary"
+                        style={{ flex:1, padding:"14px 20px", fontSize:15, fontWeight:700 }}
+                        onClick={() => { iniciarEjDocente(confirmEjDocente); setConfirmEjDocente(null) }}
+                      >
+                        Sí, iniciar →
+                      </button>
+                      <button
+                        className="btn-mock-outline"
+                        style={{ flex:1, padding:"14px 20px", fontSize:15 }}
+                        onClick={() => setConfirmEjDocente(null)}
+                      >
+                        No, cancelar
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          )
+        })()}
 
         {/* Modal REPORTE */}
         {modalReporte && reporte && (
@@ -1345,6 +1606,49 @@ export default function Dashboard() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Popup ejercicio finalizado ── */}
+        {popupFin && (
+          <div style={{
+            position:"fixed", inset:0, background:"rgba(0,0,0,0.75)",
+            display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999
+          }}>
+            <div style={{
+              background:"#1c1c1e", border:`1px solid ${popupFinPct === 100 ? "rgba(0,218,243,0.30)" : "rgba(255,159,10,0.30)"}`,
+              borderRadius:20, padding:"36px 40px", maxWidth:440, width:"90%",
+              textAlign:"center", boxShadow:"0 20px 60px rgba(0,0,0,0.60)"
+            }}>
+              <div style={{ fontSize:48, marginBottom:12 }}>{popupFinPct === 100 ? "✅" : "⏱"}</div>
+              <h2 style={{ color:"#f5f5f7", fontSize:22, fontWeight:800, margin:"0 0 10px" }}>
+                {popupFinPct === 100 ? "Ejercicio finalizado" : "Tiempo agotado"}
+              </h2>
+              {/* Barra de progreso */}
+              <div style={{ margin:"12px 0 16px", background:"rgba(255,255,255,0.08)", borderRadius:999, height:8, overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${popupFinPct}%`, background: popupFinPct === 100 ? "var(--terciario)" : "#ff9f0a", borderRadius:999, transition:"width .5s" }}/>
+              </div>
+              <div style={{ fontSize:28, fontWeight:900, fontFamily:"var(--mono)", color: popupFinPct === 100 ? "var(--terciario-dim)" : "#ff9f0a", marginBottom:12 }}>
+                {popupFinPct}%
+              </div>
+              <p style={{ color:"#8e8e93", fontSize:14, lineHeight:1.6, margin:"0 0 24px" }}>
+                {popupFinPct === 100
+                  ? <>Completaste todos los pasos correctamente.<br/><strong style={{ color:"var(--terciario-dim)" }}>Se notificará al docente</strong> para que califique tu ejercicio.</>
+                  : <>El tiempo llegó a 0. Tu progreso de <strong style={{ color:"#ff9f0a" }}>{popupFinPct}%</strong> fue registrado.<br/><strong style={{ color:"var(--primario-dim)" }}>Se notificará al docente</strong> para que evalúe tu entrega.</>
+                }
+                <br/><span style={{ fontSize:12, color:"#6e6e73" }}>Podrás ver tu nota en la sección <em>Notas</em>.</span>
+              </p>
+              <button
+                onClick={() => setPopupFin(false)}
+                style={{
+                  padding:"12px 32px", borderRadius:980,
+                  background: popupFinPct === 100 ? "var(--terciario)" : "#ff9f0a",
+                  color:"#000", fontWeight:700, fontSize:15, border:"none", cursor:"pointer"
+                }}
+              >
+                Entendido
+              </button>
             </div>
           </div>
         )}

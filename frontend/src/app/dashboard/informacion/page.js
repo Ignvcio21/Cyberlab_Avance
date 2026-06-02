@@ -104,12 +104,7 @@ export default function InformacionDashboard() {
   const NIVELES_ACTIVOS = modo === "ataque" ? NIVELES_ATAQUE : NIVELES_DEFENSA
   const desbloqueadosActivos = modo === "ataque" ? desbloqueadosAtaque : desbloqueadosDefensa
 
-  const puedeAccederNivel = (nivelId) => desbloqueadosActivos.includes(nivelId)
-
-  const NIVELES = NIVELES_ACTIVOS.map(n => ({
-    ...n,
-    bloqueado: !puedeAccederNivel(n.id),
-  }))
+  const NIVELES = NIVELES_ACTIVOS.map(n => ({ ...n, bloqueado: false }))
 
   // ── Progreso de lectura ────────────────────────────────────────
   const claveVista = (nivelId) => `${modo}_nivel${nivelId}`
@@ -332,68 +327,78 @@ export default function InformacionDashboard() {
 
             <BarraSuperior paginaActiva="informacion" />
 
-            {/* ── Header ── */}
-            <header className="hero-panel">
+            {/* ── Header estilo mockup ── */}
+            <header style={{
+              background: `linear-gradient(135deg, #1c1c1e 0%, #242426 100%)`,
+              border: `1px solid ${BORDER_MODO}`,
+              borderRadius: 18, padding: "22px 28px",
+              boxShadow: "0 4px 24px rgba(0,0,0,0.50)",
+              display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16,
+            }}>
               <div>
-                <div className="hero-badge" style={{ background: BG_MODO, borderColor: BORDER_MODO, color: COLOR_DIM }}>
+                <span style={{
+                  fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, letterSpacing: "0.08em",
+                  textTransform: "uppercase", background: BG_MODO, color: COLOR_DIM,
+                  border: `1px solid ${BORDER_MODO}`, borderRadius: 999, padding: "4px 12px",
+                }}>
                   {LABEL_MODO}
-                </div>
-                <h1 style={{ margin: "8px 0 4px", fontSize: 22, color: "#fff", fontFamily: "var(--sans)", fontWeight: 700 }}>
+                </span>
+                <h1 style={{ margin: "10px 0 4px", fontSize: 26, color: "#f5f5f7", fontFamily: "var(--sans)", fontWeight: 800, letterSpacing: "-0.5px" }}>
                   Información del nivel
                 </h1>
-                <p className="hero-subtitle">
+                <p style={{ margin: 0, fontSize: 15, color: "#8e8e93" }}>
                   Operador activo: <strong style={{ color: COLOR_DIM }}>{nombreUsuario}</strong>
                   {cargandoProgreso && (
-                    <span style={{ marginLeft: 10, fontSize: 11, color: "var(--texto-apagado)", fontFamily: "var(--mono)" }}>
-                      Sincronizando progreso...
+                    <span style={{ marginLeft: 10, fontSize: 11, color: "#8e8e93", fontFamily: "var(--mono)" }}>
+                      Sincronizando...
                     </span>
                   )}
                 </p>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => router.push(modo === "defensa" ? "/dashboard/defensa" : "/dashboard")} className="logout-button">
-                  {modo === "defensa" ? "Volver a Defensa" : "Volver al laboratorio"}
-                </button>
-              </div>
+              <button
+                onClick={() => router.push(modo === "defensa" ? "/dashboard/defensa" : "/dashboard")}
+                style={{
+                  padding: "10px 20px", borderRadius: 980, border: "1px solid rgba(255,180,171,0.20)",
+                  background: "rgba(255,100,80,0.10)", color: "#ffb4ab",
+                  fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "var(--cuerpo)",
+                  flexShrink: 0, transition: "all 0.2s",
+                }}
+                onMouseEnter={e => e.currentTarget.style.background="rgba(255,100,80,0.20)"}
+                onMouseLeave={e => e.currentTarget.style.background="rgba(255,100,80,0.10)"}
+              >
+                {modo === "defensa" ? "Volver a Defensa" : "Volver al laboratorio"}
+              </button>
             </header>
 
-            {/* ── Selector de modo ── */}
+            {/* ── Selector de modo — pills redondeadas ── */}
             <div style={{
-              display: "flex", gap: 8, padding: "14px 18px",
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderTop: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: 16,
-              backdropFilter: "blur(20px)",
+              display: "flex", gap: 8, padding: "12px 16px",
+              background: "#1c1c1e", border: "1px solid #2c2c2e",
+              borderRadius: 14, alignItems: "center",
             }}>
-              <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: "var(--texto-apagado)", display: "flex", alignItems: "center", marginRight: 8 }}>
-                MODO:
-              </span>
+              <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: "#8e8e93", marginRight: 4 }}>MODO:</span>
               {[
-                { id: "ataque",  label: "⚔ Modo Ataque",  color: "var(--primario-dim)",  bg: "rgba(0,163,255,0.12)",   border: "rgba(0,163,255,0.30)" },
-                { id: "defensa", label: "🛡 Modo Defensa", color: "var(--terciario-dim)", bg: "rgba(0,218,243,0.12)",   border: "rgba(0,218,243,0.30)" },
+                { id: "ataque",  label: "⚔ Modo Ataque",  color: "#6db8ff", bg: "rgba(41,151,255,0.14)", border: "rgba(41,151,255,0.35)" },
+                { id: "defensa", label: "🛡 Modo Defensa", color: "#86efac", bg: "rgba(48,209,88,0.14)",  border: "rgba(48,209,88,0.35)" },
               ].map(m => (
                 <button
                   key={m.id}
                   onClick={() => cambiarModo(m.id)}
                   style={{
-                    padding: "8px 18px", borderRadius: 999, fontSize: 13, fontWeight: 700,
+                    padding: "9px 20px", borderRadius: 980, fontSize: 13, fontWeight: 700,
                     fontFamily: "var(--cuerpo)", cursor: "pointer",
                     border: `1px solid ${modo === m.id ? m.border : "rgba(255,255,255,0.10)"}`,
-                    background: modo === m.id ? m.bg : "rgba(255,255,255,0.04)",
-                    color: modo === m.id ? m.color : "var(--texto-apagado)",
-                    boxShadow: modo === m.id ? `0 0 16px ${m.border}` : "none",
+                    background: modo === m.id ? m.bg : "rgba(255,255,255,0.05)",
+                    color: modo === m.id ? m.color : "#8e8e93",
+                    boxShadow: modo === m.id ? `0 2px 14px ${m.border}` : "none",
                     transition: "all 0.22s ease",
                   }}
                 >
                   {m.label}
                 </button>
               ))}
-              {/* Descripción del modo activo */}
-              <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--mono)", color: "var(--texto-apagado)", display: "flex", alignItems: "center" }}>
-                {modo === "defensa"
-                  ? "Análisis, detección y mitigación de incidentes"
-                  : "Pentesting, reconocimiento y explotación controlada"}
+              <span style={{ marginLeft: "auto", fontSize: 11, fontFamily: "var(--mono)", color: "#8e8e93" }}>
+                {modo === "defensa" ? "Análisis, detección y mitigación de incidentes" : "Pentesting, reconocimiento y explotación controlada"}
               </span>
             </div>
 
@@ -421,22 +426,15 @@ export default function InformacionDashboard() {
                             key={n.id}
                             className={`info-item ${activo ? "activo" : ""}`}
                             onClick={() => {
-                              if (n.bloqueado) return
                               setNivelLeccion(n.id)
                               setSeccionLeccion("introduccion")
                               guardarLS(claveActiva, { nivelLeccion: n.id, seccionLeccion: "introduccion" })
                             }}
-                            disabled={n.bloqueado}
-                            title={n.bloqueado
-                              ? modo === "defensa"
-                                ? `Completa el Nivel ${n.id - 1} de defensa para desbloquear`
-                                : `Completa el laboratorio del Nivel ${n.id - 1} para desbloquear`
-                              : ""}
                             style={activo ? { borderColor: BORDER_MODO, background: BG_MODO } : {}}
                           >
                             <div className="info-item-top">
                               <div className="info-item-name">
-                                {n.bloqueado ? "🔒 " : ""}{modo === "defensa" ? "D" : "N"}{n.id}: {n.titulo}
+                                {modo === "defensa" ? "D" : "N"}{n.id}: {n.titulo}
                               </div>
                               <div className="info-item-meta">
                                 <span className="info-mini-progreso" style={{ color: COLOR_DIM, borderColor: BORDER_MODO, background: BG_MODO }}>

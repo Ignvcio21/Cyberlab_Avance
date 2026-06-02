@@ -6,156 +6,180 @@ import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 import TransicionPagina from "../componentes/TransicionPagina"
 
+const TOTAL_EJ = 5
+const NOMBRES_NIV = {
+  1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración",
+  4: "Explotación", 5: "Post-exploit", 6: "Avanzado", 7: "Operación"
+}
+const vacioNiveles = () => Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, { completados: 0 }]))
+
 export default function InicioPlataforma() {
   const router = useRouter()
   const [nombreUsuario, setNombreUsuario] = useState("")
   const [rolUsuario, setRolUsuario] = useState("")
+  const [progAtaque,  setProgAtaque]  = useState(vacioNiveles())
+  const [progDefensa, setProgDefensa] = useState(vacioNiveles())
+
+  const cargarProgreso = async (usuario, token) => {
+    const API_URL = process.env.NEXT_PUBLIC_API_URL
+    const headers = { "Authorization": `Bearer ${token}` }
+    const parsear = (d) => {
+      const det = d?.detalle || {}
+      return Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, { completados: Math.min(det[String(n)]?.completados || 0, TOTAL_EJ) }]))
+    }
+    try {
+      const [rA, rD] = await Promise.all([
+        fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}?tipo=ataque`,  { headers }),
+        fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}?tipo=defensa`, { headers }),
+      ])
+      if (rA.ok) setProgAtaque(parsear(await rA.json()))
+      if (rD.ok) setProgDefensa(parsear(await rD.json()))
+    } catch {}
+  }
 
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario") || ""
-    const r = localStorage.getItem("rol_usuario") || ""
-    setNombreUsuario(u)
-    setRolUsuario(r)
+    const nombre  = localStorage.getItem("nombre_display") || localStorage.getItem("nombre_usuario") || ""
+    const usuario = localStorage.getItem("nombre_usuario") || ""
+    const r       = localStorage.getItem("rol_usuario") || ""
+    setNombreUsuario(nombre); setRolUsuario(r)
+    if (usuario) cargarProgreso(usuario, localStorage.getItem("token") || "")
   }, [])
+
+  const totalAtaque  = Object.values(progAtaque).reduce((s, v)  => s + (v.completados || 0), 0)
+  const totalDefensa = Object.values(progDefensa).reduce((s, v) => s + (v.completados || 0), 0)
+  const totalComp    = totalAtaque + totalDefensa
+  const nivelActual  = Object.keys(progAtaque).find(n => (progAtaque[n]?.completados || 0) < TOTAL_EJ) || "7"
 
   return (
     <GuardSesion>
       <TransicionPagina>
-        <main className="inicio-plataforma-simple">
+        <main style={{ minHeight: "100vh", background: "#141414" }}>
           <BarraSuperior paginaActiva="inicio" />
 
-          <section style={{ maxWidth: 1280, margin: "0 auto", display: "grid", gap: 20 }}>
-            {/* Hero */}
-            <div className="inicio-hero-contenido" style={{ position: "relative" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 20 }}>
-                <div style={{ flex: 1, minWidth: 280 }}>
-                  <div className="inicio-badge">▸ PLATAFORMA ACTIVA</div>
-                  <h1 className="inicio-titulo" style={{ marginTop: 14 }}>
-                    Bienvenido,{" "}
-                    <span className="inicio-acento">{nombreUsuario || "Operador"}</span>
-                  </h1>
-                  <p style={{ color: "var(--texto-secundario)", lineHeight: 1.7, fontSize: 15, marginBottom: 24, maxWidth: "55ch" }}>
-                    Centro de entrenamiento práctico en ciberseguridad y pentesting.
-                    Completa los ejercicios para desbloquear nuevos módulos de ataque.
-                  </p>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button
-                      className="attack-button"
-                      onClick={() => router.push("/dashboard")}
-                    >
-                      → Ir al Laboratorio
-                    </button>
-                    <button
-                      className="attack-button secondary"
-                      onClick={() => router.push("/dashboard/informacion?nivel=1")}
-                    >
-                      Módulo de Información
-                    </button>
-                  </div>
-                </div>
-
-                {/* Badge de rol */}
-                <div style={{
-                  padding: "20px 24px",
-                  background: "rgba(0,163,255,0.08)",
-                  border: "1px solid rgba(0,163,255,0.18)",
-                  borderRadius: 14,
-                  textAlign: "center",
-                  minWidth: 160
-                }}>
-                  <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--texto-apagado)", letterSpacing: "0.08em", marginBottom: 8 }}>ROL ASIGNADO</div>
-                  <div style={{ fontFamily: "var(--sans)", fontSize: 22, fontWeight: 700, color: "var(--primario-dim)", textTransform: "capitalize" }}>
-                    {rolUsuario || "Estudiante"}
-                  </div>
-                  <div style={{ marginTop: 8, width: 8, height: 8, borderRadius: "50%", background: "var(--verde)", boxShadow: "0 0 10px var(--verde)", margin: "8px auto 0" }} />
-                </div>
-              </div>
-            </div>
-
-            {/* Métricas SOC */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-              {[
-                { label: "MÓDULOS ACTIVOS", valor: "2", desc: "Fuerza Bruta · Escaneo de Puertos", color: "var(--primario)" },
-                { label: "EJERCICIOS TOTALES", valor: "10", desc: "5 por tipo de ataque", color: "var(--terciario)" },
-                { label: "TERMINAL", valor: "Kali", desc: "cyberlab@kali:~$", color: "var(--secundario-dim)" },
-                { label: "PENALIZACIÓN MÁX.", valor: "−30%", desc: "6 ayudas · −5% c/u", color: "#ffb4ab" },
-              ].map(({ label, valor, desc, color }) => (
-                <div key={label} style={{
-                  padding: "18px 20px",
-                  background: "rgba(255,255,255,0.04)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  borderTop: "1px solid rgba(255,255,255,0.12)",
-                  borderRadius: 14,
-                  backdropFilter: "blur(20px)"
-                }}>
-                  <div style={{ fontFamily: "var(--mono)", fontSize: 10, letterSpacing: "0.10em", color: "var(--texto-apagado)", marginBottom: 10 }}>{label}</div>
-                  <div style={{ fontFamily: "var(--sans)", fontSize: 30, fontWeight: 700, color, lineHeight: 1 }}>{valor}</div>
-                  <div style={{ fontSize: 12, color: "var(--texto-apagado)", marginTop: 8, fontFamily: "var(--mono)" }}>{desc}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Cards de módulos */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
-              <ModuloCard
-                titulo="Fuerza Bruta"
-                desc="Aprende a detectar y bloquear ataques de autenticación exhaustiva. 5 ejercicios progresivos con checklist dinámico."
-                tag="MÓDULO I"
-                color="var(--primario)"
-                onClick={() => router.push("/dashboard")}
-                activo
-              />
-              <ModuloCard
-                titulo="Escaneo de Puertos"
-                desc="Identifica servicios expuestos y analiza vectores de entrada en la infraestructura objetivo. Se desbloquea al completar Fuerza Bruta."
-                tag="MÓDULO II"
-                color="var(--terciario)"
-                onClick={() => router.push("/dashboard")}
-              />
-              <ModuloCard
-                titulo="Módulo Teórico"
-                desc="Fundamentos, metodología y buenas prácticas de pentesting. Lee cada sección para desbloquear las simulaciones prácticas."
-                tag="INFORMACIÓN"
-                color="var(--secundario-dim)"
-                onClick={() => router.push("/dashboard/informacion?nivel=1")}
-              />
+          {/* ── HERO ── */}
+          <section className="home-hero">
+            <p className="home-eyebrow">Dashboard de progreso</p>
+            <h1>
+              Hola, <em>{nombreUsuario || "Operador"}</em>.{" "}
+              <span style={{ fontStyle: "normal" }}>👋</span>
+            </h1>
+            <p>
+              {totalComp > 0
+                ? <>Llevas <strong style={{ color: "#f5f5f7" }}>{totalComp} ejercicios completados</strong> de 35. Sigue avanzando en el Nivel {nivelActual}.</>
+                : "Bienvenido al laboratorio. Comienza tu primer ejercicio para desbloquear los módulos."}
+            </p>
+            <div className="home-hero-actions">
+              <button className="btn-mock-primary" onClick={() => router.push("/dashboard")}>
+                Continuar Nivel {nivelActual} →
+              </button>
+              <button className="btn-mock-outline" onClick={() => router.push("/dashboard/informacion?nivel=1")}>
+                Ver módulo teórico
+              </button>
             </div>
           </section>
+
+          {/* ── PROGRESO ── */}
+          <section className="home-section-dark">
+            <h2 className="home-section-title">Tu progreso</h2>
+            <p className="home-section-sub">Avance por niveles del semestre</p>
+
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24 }}>
+
+              {/* ── Ataque ── */}
+              <div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:12 }}>
+                  <span style={{ fontSize:18 }}>⚔️</span>
+                  <span style={{ fontWeight:700, fontSize:15, color:"#f5f5f7" }}>Ataque</span>
+                  <span style={{ fontSize:12, color:"#8e8e93", fontFamily:"var(--mono)" }}>{totalAtaque}/35</span>
+                </div>
+                <div className="progress-card-mock">
+                  {[1,2,3,4,5,6,7].map(n => {
+                    const comp = progAtaque[n]?.completados || 0
+                    const pct  = Math.round((comp / TOTAL_EJ) * 100)
+                    return (
+                      <div className="prog-row" key={n}>
+                        <span className="prog-row-label">Nivel {n}</span>
+                        <div className="prog-row-track">
+                          <div className={`prog-row-fill${pct === 100 ? " green" : pct === 0 ? " orange" : ""}`} style={{ width:`${pct}%` }}/>
+                        </div>
+                        <span className="prog-row-pct">{pct}%</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* ── Defensa ── */}
+              <div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:12 }}>
+                  <span style={{ fontSize:18 }}>🛡️</span>
+                  <span style={{ fontWeight:700, fontSize:15, color:"#f5f5f7" }}>Defensa</span>
+                  <span style={{ fontSize:12, color:"#8e8e93", fontFamily:"var(--mono)" }}>{totalDefensa}/35</span>
+                </div>
+                <div className="progress-card-mock">
+                  {[1,2,3,4,5,6,7].map(n => {
+                    const comp = progDefensa[n]?.completados || 0
+                    const pct  = Math.round((comp / TOTAL_EJ) * 100)
+                    return (
+                      <div className="prog-row" key={n}>
+                        <span className="prog-row-label">Nivel {n}</span>
+                        <div className="prog-row-track">
+                          <div style={{ height:"100%", borderRadius:999, width:`${pct}%`, background: pct === 100 ? "#30d158" : pct > 0 ? "#30d158" : "transparent", opacity: pct > 0 && pct < 100 ? 0.75 : 1 }}/>
+                        </div>
+                        <span className="prog-row-pct" style={{ color: pct > 0 ? "#30d158" : undefined }}>{pct}%</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+            </div>
+          </section>
+
+          {/* ── MÓDULOS ── */}
+          <section className="home-section-light" style={{ borderTop: "1px solid #2c2c2e" }}>
+            <h2 className="home-section-title">Módulos disponibles</h2>
+            <p className="home-section-sub">Explora y practica cada área de ciberseguridad</p>
+            <div className="home-grid-3">
+              <div className="home-card-mock" onClick={() => router.push("/dashboard")}>
+                <div className="home-card-icon">🛡️</div>
+                <h3>Defensa IDS</h3>
+                <p>Responde incidentes en tiempo real. Monitorea alertas, bloquea IPs y genera reportes técnicos.</p>
+              </div>
+              <div className="home-card-mock" onClick={() => router.push("/dashboard")}>
+                <div className="home-card-icon">⚡</div>
+                <h3>Fuerza Bruta</h3>
+                <p>Detecta y mitiga ataques de fuerza bruta. Analiza patrones de login fallidos y aplica contención.</p>
+              </div>
+              <div className="home-card-mock" onClick={() => router.push("/dashboard")}>
+                <div className="home-card-icon">🔍</div>
+                <h3>Reconocimiento</h3>
+                <p>Enumera servicios, escanea puertos y mapea la red objetivo paso a paso.</p>
+              </div>
+              <div className="home-card-mock" onClick={() => router.push("/dashboard")}>
+                <div className="home-card-icon">🧬</div>
+                <h3>Vulnerabilidades</h3>
+                <p>Identifica CVEs activos, analiza banners de servicios y prioriza el parcheo de sistemas.</p>
+              </div>
+              <div className="home-card-mock" onClick={() => router.push("/dashboard/informacion?nivel=1")}>
+                <div className="home-card-icon">📖</div>
+                <h3>Módulo Teórico</h3>
+                <p>Fundamentos, metodología y buenas prácticas de pentesting. Lee cada sección para desbloquear prácticas.</p>
+              </div>
+              <div className="home-card-mock" onClick={() => router.push(rolUsuario === "estudiante" ? "/notas" : "/panel")}>
+                <div className="home-card-icon">📊</div>
+                <h3>{rolUsuario === "estudiante" ? "Evaluaciones" : "Panel de gestión"}</h3>
+                <p>
+                  {rolUsuario === "estudiante"
+                    ? "Revisa tus notas, puntajes por ejercicio y retroalimentación del docente."
+                    : "Administra estudiantes, crea ejercicios y gestiona evaluaciones."}
+                </p>
+              </div>
+            </div>
+          </section>
+
         </main>
       </TransicionPagina>
     </GuardSesion>
-  )
-}
-
-function ModuloCard({ titulo, desc, tag, color, onClick, activo }) {
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        padding: "22px",
-        background: "rgba(255,255,255,0.04)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderTop: `2px solid ${color}`,
-        borderRadius: 14,
-        cursor: "pointer",
-        transition: "all 0.2s ease",
-        backdropFilter: "blur(20px)",
-      }}
-      onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; e.currentTarget.style.transform = "translateY(-3px)" }}
-      onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.transform = "translateY(0)" }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <span style={{
-          fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700,
-          letterSpacing: "0.10em", color, padding: "4px 10px",
-          background: `${color}18`, border: `1px solid ${color}33`, borderRadius: 999
-        }}>{tag}</span>
-        {activo && (
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--verde)", boxShadow: "0 0 10px var(--verde)", display: "inline-block" }} />
-        )}
-      </div>
-      <h3 style={{ fontFamily: "var(--sans)", fontSize: 17, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}>{titulo}</h3>
-      <p style={{ fontSize: 13, color: "var(--texto-secundario)", lineHeight: 1.65, margin: 0 }}>{desc}</p>
-    </div>
   )
 }

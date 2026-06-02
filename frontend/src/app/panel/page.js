@@ -45,47 +45,66 @@ const NOMBRES_NIVELES_PANEL = {
 
 const nivelDeEj = (ej_id) => ej_id ? Math.ceil(ej_id / 5) : 1
 
-function PanelPerfilNiveles({ nombreEstudiante, intentos, cargando, ordenDesc, setOrdenDesc, onVolver, onEvaluar }) {
+const TODOS_LOS_NIVELES = [1, 2, 3, 4, 5, 6, 7]
+
+function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, ordenDesc, setOrdenDesc, onVolver, onEvaluar, onEvaluarEntrega }) {
   const [nivelAbierto, setNivelAbierto] = useState(null)
 
-  // Agrupar por nivel
+  // Unificar intentos (terminal) y entregas (docente) por nivel
   const porNivel = {}
+  TODOS_LOS_NIVELES.forEach(n => { porNivel[n] = { intentos: [], entregas: [] } })
   intentos.forEach(it => {
     const n = nivelDeEj(it.ejercicio_id)
-    if (!porNivel[n]) porNivel[n] = []
-    porNivel[n].push(it)
+    if (!porNivel[n]) porNivel[n] = { intentos: [], entregas: [] }
+    porNivel[n].intentos.push(it)
+  })
+  entregas.forEach(en => {
+    const n = en.nivel || 1
+    if (!porNivel[n]) porNivel[n] = { intentos: [], entregas: [] }
+    porNivel[n].entregas.push(en)
   })
 
-  const niveles = Object.keys(porNivel).map(Number).sort((a, b) => a - b)
-
-  const ordenar = (lista) => [...lista].sort((a, b) => {
-    const da = new Date(a.fecha_inicio || 0)
-    const db = new Date(b.fecha_inicio || 0)
+  const ordenar = (lista, campoFecha) => [...lista].sort((a, b) => {
+    const da = new Date(a[campoFecha] || 0)
+    const db = new Date(b[campoFecha] || 0)
     return ordenDesc ? db - da : da - db
   })
 
-  const evalCount = (lista) => lista.filter(it => it.tiene_evaluacion).length
-  const aprobCount= (lista) => lista.filter(it => it.estado === "aprobado").length
-  const notaMedia = (lista) => {
-    const ev = lista.filter(it => it.nota != null)
-    if (!ev.length) return null
-    return (ev.reduce((s, it) => s + it.nota, 0) / ev.length).toFixed(1)
-  }
+  // Nota general: promedio de todas las notas del alumno
+  const notaGeneral = (() => {
+    const todasLasNotas = [
+      ...intentos.filter(it => it.nota != null).map(it => it.nota),
+      ...entregas.filter(en => en.nota != null).map(en => en.nota),
+    ]
+    if (!todasLasNotas.length) return null
+    return (todasLasNotas.reduce((s, n) => s + n, 0) / todasLasNotas.length).toFixed(1)
+  })()
 
   return (
     <div className="panel-body">
       <div className="perfil-detalle-header">
         <button className="btn-volver" onClick={onVolver}>← Volver</button>
-        <div>
+        <div style={{ flex:1 }}>
           <div className="perfil-detalle-nombre">{nombreEstudiante}</div>
           <div className="perfil-detalle-sub">
-            {intentos.length} intentos · {niveles.length} niveles
+            {entregas.length} entregas · {intentos.length} intentos terminal · 7 niveles
           </div>
         </div>
+        {/* Nota general del alumno */}
+        {notaGeneral !== null && (
+          <div style={{ textAlign:"center", marginRight:12 }}>
+            <div style={{
+              fontSize:28, fontWeight:900, fontFamily:"var(--mono)",
+              color: notaGeneral >= 4 ? "var(--terciario-dim)" : "#ffb4ab",
+              lineHeight:1
+            }}>{notaGeneral}</div>
+            <div style={{ fontSize:10, color:"var(--texto-apagado)", marginTop:2 }}>nota general</div>
+          </div>
+        )}
         <button
           onClick={() => setOrdenDesc(v => !v)}
           style={{
-            marginLeft:"auto", padding:"6px 12px",
+            padding:"6px 12px",
             background:"rgba(255,255,255,0.06)",
             border:"1px solid rgba(255,255,255,0.10)",
             borderRadius:8, color:"var(--texto-secundario)",
@@ -98,107 +117,124 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, cargando, ordenDesc, s
 
       {cargando && <div className="panel-cargando">Cargando...</div>}
 
-      {/* Un acordeón por nivel */}
+      {/* Acordeón — siempre los 7 niveles */}
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {niveles.map(n => {
-          const lista    = porNivel[n]
-          const aprobados= aprobCount(lista)
-          const nota     = notaMedia(lista)
-          const eval_    = evalCount(lista)
-          const abierto  = nivelAbierto === n
+        {TODOS_LOS_NIVELES.map(n => {
+          const { intentos: listInt, entregas: listEnt } = porNivel[n]
+          const total   = listInt.length + listEnt.length
+          const eval_   = listInt.filter(it => it.tiene_evaluacion).length + listEnt.filter(en => en.nota != null).length
+          const vacio   = total === 0
+          const abierto = nivelAbierto === n
 
           return (
             <div key={n} style={{
-              border:"1px solid rgba(255,255,255,0.08)",
+              border:`1px solid ${vacio ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.08)"}`,
               borderRadius:12, overflow:"hidden",
-              background:"rgba(255,255,255,0.03)"
+              background: vacio ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.03)"
             }}>
               {/* Cabecera nivel */}
               <button
-                onClick={() => setNivelAbierto(abierto ? null : n)}
+                onClick={() => !vacio && setNivelAbierto(abierto ? null : n)}
                 style={{
                   width:"100%", textAlign:"left", background:"none", border:"none",
-                  padding:"14px 16px", cursor:"pointer",
+                  padding:"12px 16px", cursor: vacio ? "default" : "pointer",
                   display:"flex", alignItems:"center", gap:14,
-                  borderBottom: abierto ? "1px solid rgba(255,255,255,0.07)" : "none"
+                  borderBottom: abierto ? "1px solid rgba(255,255,255,0.07)" : "none",
+                  opacity: vacio ? 0.45 : 1,
                 }}
               >
-                {/* Número de nivel */}
                 <div style={{
-                  width:36, height:36, borderRadius:8, flexShrink:0,
-                  background: nota >= 4 ? "rgba(0,218,243,0.15)" : nota !== null ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.06)",
-                  border:`1px solid ${nota >= 4 ? "rgba(0,218,243,0.28)" : nota !== null ? "rgba(239,68,68,0.22)" : "rgba(255,255,255,0.10)"}`,
+                  width:32, height:32, borderRadius:8, flexShrink:0,
+                  background: vacio ? "rgba(255,255,255,0.04)" : "rgba(41,151,255,0.12)",
+                  border:`1px solid ${vacio ? "rgba(255,255,255,0.07)" : "rgba(41,151,255,0.25)"}`,
                   display:"grid", placeItems:"center",
-                  fontWeight:900, fontSize:14, fontFamily:"var(--mono)",
-                  color: nota >= 4 ? "var(--terciario-dim)" : nota !== null ? "#ffb4ab" : "var(--texto-apagado)"
+                  fontWeight:900, fontSize:13, fontFamily:"var(--mono)",
+                  color: vacio ? "var(--texto-apagado)" : "#6db8ff"
                 }}>
                   {n}
                 </div>
 
-                {/* Info del nivel */}
                 <div style={{ flex:1 }}>
-                  <div style={{ color:"#fff", fontWeight:700, fontSize:14 }}>
+                  <div style={{ color: vacio ? "var(--texto-apagado)" : "#fff", fontWeight:700, fontSize:14 }}>
                     Nivel {n} — {NOMBRES_NIVELES_PANEL[n] || ""}
                   </div>
                   <div style={{ color:"var(--texto-apagado)", fontSize:11, fontFamily:"var(--mono)", marginTop:2 }}>
-                    {aprobados}/{lista.length} ejercicios completados
-                    {eval_ > 0 ? ` · ${eval_} evaluados` : ""}
+                    {vacio ? "Sin entregas" : `${total} entrega${total !== 1 ? "s" : ""}${eval_ > 0 ? ` · ${eval_} evaluados` : ""}`}
                   </div>
                 </div>
 
-                {/* Nota media */}
-                {nota !== null ? (
-                  <div style={{ textAlign:"center", marginRight:8 }}>
-                    <div style={{
-                      fontSize:20, fontWeight:900, fontFamily:"var(--mono)",
-                      color: nota >= 4 ? "var(--terciario-dim)" : "#ffb4ab"
-                    }}>
-                      {nota}
-                    </div>
-                    <div style={{ fontSize:9, color:"var(--texto-apagado)" }}>media</div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginRight:8 }}>
-                    Sin nota
-                  </div>
+                {!vacio && (
+                  <span style={{ color:"var(--texto-apagado)", fontSize:14 }}>{abierto ? "▲" : "▼"}</span>
                 )}
-
-                {/* Barra progreso */}
-                <div style={{ width:60, marginRight:8 }}>
-                  <div style={{ height:4, borderRadius:999, background:"rgba(255,255,255,0.08)", overflow:"hidden" }}>
-                    <div style={{
-                      height:"100%", borderRadius:999,
-                      background: aprobados >= 5 ? "var(--terciario)" : "var(--primario)",
-                      width:`${Math.min(aprobados/5,1)*100}%`
-                    }}/>
-                  </div>
-                  <div style={{ fontSize:9, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:2, textAlign:"right" }}>
-                    {aprobados}/5 ej.
-                  </div>
-                </div>
-
-                <span style={{ color:"var(--texto-apagado)", fontSize:14 }}>{abierto ? "▲" : "▼"}</span>
               </button>
 
-              {/* Lista de ejercicios del nivel */}
+              {/* Contenido del nivel */}
               {abierto && (
                 <div style={{ padding:"12px 16px", display:"flex", flexDirection:"column", gap:8 }}>
-                  {ordenar(lista).map(it => (
-                    <div key={it.intento_id}
+
+                  {/* Entregas de ejercicios docente */}
+                  {ordenar(listEnt, "fecha_entrega").map(en => (
+                    <div key={`ent-${en.id}`}
+                      className={`intento-card ${en.nota != null && en.nota >= 4 ? "intento-aprobado" : ""}`}
+                    >
+                      <div className="intento-top">
+                        <div className="intento-ej">
+                          <span className="intento-ej-id">
+                            {en.numero_ejercicio ? `#${en.numero_ejercicio} · ` : ""}{en.titulo_ejercicio || `Ejercicio #${en.ejercicio_id}`}
+                          </span>
+                          <span className="intento-ej-desc">{en.descripcion_ejercicio || "—"}</span>
+                          <span style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:2, display:"block" }}>
+                            🕐 {formatFecha(en.fecha_entrega)}
+                          </span>
+                        </div>
+                        <div className="intento-badges">
+                          <span className={`intento-estado ${en.estado === "evaluado" ? "est-verde" : "est-gris"}`}>
+                            {en.estado}
+                          </span>
+                          {en.nota != null && (
+                            <span style={{
+                              fontSize:14, fontWeight:900,
+                              color: en.nota >= 4 ? "var(--terciario-dim)" : "#ffb4ab",
+                              background: en.nota >= 4 ? "rgba(0,218,243,0.10)" : "rgba(255,180,171,0.10)",
+                              border:`1px solid ${en.nota >= 4 ? "rgba(0,218,243,0.25)" : "rgba(255,180,171,0.25)"}`,
+                              padding:"3px 10px", borderRadius:6, fontFamily:"var(--mono)"
+                            }}>
+                              Nota: {en.nota}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {(en.ayudas_pedidas || 0) > 0 && (
+                        <div className="intento-meta">
+                          <span className="intento-ayuda">💡 {en.ayudas_pedidas} ayudas</span>
+                        </div>
+                      )}
+                      {en.comentarios_docente && (
+                        <div style={{ fontSize:12, color:"var(--texto-apagado)", fontStyle:"italic", marginTop:4 }}>
+                          "{en.comentarios_docente}"
+                        </div>
+                      )}
+                      <button className="btn-evaluar" onClick={() => onEvaluarEntrega(en)} disabled={cargando}>
+                        {en.nota != null ? "✏ Editar evaluación" : "📋 Evaluar"}
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Intentos de ejercicios del terminal */}
+                  {ordenar(listInt, "fecha_inicio").map(it => (
+                    <div key={`int-${it.intento_id}`}
                       className={`intento-card ${it.estado==="aprobado"?"intento-aprobado":""}`}
                     >
                       <div className="intento-top">
                         <div className="intento-ej">
-                          <span className="intento-ej-id">Ejercicio #{it.ejercicio_id}</span>
+                          <span className="intento-ej-id">Terminal #{it.ejercicio_id}</span>
                           <span className="intento-ej-desc">{it.descripcion_ejercicio || "—"}</span>
                           <span style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:2, display:"block" }}>
                             🕐 {formatFecha(it.fecha_inicio)}
                           </span>
                         </div>
                         <div className="intento-badges">
-                          <span className={`intento-estado ${it.estado==="aprobado"?"est-verde":"est-gris"}`}>
-                            {it.estado}
-                          </span>
+                          <span className={`intento-estado ${it.estado==="aprobado"?"est-verde":"est-gris"}`}>{it.estado}</span>
                           <span className="intento-pct">{it.porcentaje}%</span>
                           {it.tiene_evaluacion && it.nota != null && (
                             <span style={{
@@ -207,9 +243,7 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, cargando, ordenDesc, s
                               background: it.nota >= 4 ? "rgba(0,218,243,0.10)" : "rgba(255,180,171,0.10)",
                               border:`1px solid ${it.nota >= 4 ? "rgba(0,218,243,0.25)" : "rgba(255,180,171,0.25)"}`,
                               padding:"3px 10px", borderRadius:6, fontFamily:"var(--mono)"
-                            }}>
-                              Nota: {it.nota}
-                            </span>
+                            }}>Nota: {it.nota}</span>
                           )}
                         </div>
                       </div>
@@ -217,9 +251,7 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, cargando, ordenDesc, s
                         <span>⏱ {it.tiempo_seg}s</span>
                         <span>❌ {it.errores} errores</span>
                         {(it.ayudas_pedidas || 0) > 0 && (
-                          <span className="intento-ayuda">
-                            💡 {it.ayudas_pedidas} ayudas (-{Math.min(it.ayudas_pedidas*5,30)}%)
-                          </span>
+                          <span className="intento-ayuda">💡 {it.ayudas_pedidas} ayudas (-{Math.min(it.ayudas_pedidas*5,30)}%)</span>
                         )}
                         {it.tiene_evaluacion && <span className="intento-eval-badge">📋 Evaluado</span>}
                       </div>
@@ -234,9 +266,7 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, cargando, ordenDesc, s
           )
         })}
 
-        {niveles.length === 0 && !cargando && (
-          <div className="panel-vacio">Este estudiante no tiene intentos registrados.</div>
-        )}
+        {cargando && <div className="panel-cargando" style={{ marginTop:8 }}>Cargando entregas...</div>}
       </div>
     </div>
   )
@@ -262,9 +292,34 @@ export default function PanelDocente() {
   const [nuevoU, setNuevoU] = useState("")
   const [nuevaC, setNuevaC] = useState("")
   const [nuevoR, setNuevoR] = useState("estudiante")
+  const [nuevoCorreo, setNuevoCorreo] = useState("")
+  const [confirmRolModal, setConfirmRolModal] = useState(null)
+  const [confirmEliminar, setConfirmEliminar] = useState(null)
+  const [filtroEst,       setFiltroEst]       = useState("todos")   // todos | pendientes | aprobados | reprobados
+  const [busquedaEst,     setBusquedaEst]     = useState("")
 
   const [editandoRolId,  setEditandoRolId]  = useState(null)
   const [rolEditValor,   setRolEditValor]   = useState("")
+  const [entregasPerfil, setEntregasPerfil] = useState([])
+
+  // ── Tab ejercicios docente ──
+  const [ejercicios,          setEjercicios]          = useState([])
+  const [entregasEj,          setEntregasEj]          = useState([])
+  const [ejSeleccionado,      setEjSeleccionado]      = useState(null)
+  const [vistaEjercicios,     setVistaEjercicios]     = useState("lista") // lista | crear | entregas
+  const [ejTitulo,            setEjTitulo]            = useState("")
+  const [ejDescripcion,       setEjDescripcion]       = useState("")
+  const [ejInstrucciones,     setEjInstrucciones]     = useState("")
+  const [ejItems,             setEjItems]             = useState([""])
+  const [ejTipo,              setEjTipo]              = useState("ataque")
+  const [ejNivel,             setEjNivel]             = useState(1)
+  const [ejTiempo,            setEjTiempo]            = useState(10)
+  const [modalIa,             setModalIa]             = useState(false)
+  const [iaNumPuntos,         setIaNumPuntos]         = useState(4)
+  const [cargandoIa,          setCargandoIa]          = useState(false)
+  const [modalEntrega,        setModalEntrega]        = useState(null)
+  const [notaEntrega,         setNotaEntrega]         = useState("")
+  const [comentariosEntrega,  setComentariosEntrega]  = useState("")
 
   const esAdmin = rolUsuario === "admin"
 
@@ -278,8 +333,9 @@ export default function PanelDocente() {
 
   useEffect(() => {
     if (!nombreUsuario) return
-    if (tab === "estudiantes") cargarIntentos()
+    if (tab === "estudiantes") { cargarIntentos(); cargarUsuarios() }
     if (tab === "usuarios")    cargarUsuarios()
+    if (tab === "ejercicios")  cargarEjercicios()
   }, [tab, nombreUsuario])
 
   const cargarIntentos = async () => {
@@ -311,19 +367,45 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
-  // Agrupar intentos por estudiante
+  // Agrupar intentos por estudiante (incluye estudiantes sin intentos)
   const perfilesEstudiantes = useMemo(() => {
     const mapa = {}
+    // Seed desde lista de usuarios estudiantes
+    usuarios.filter(u => u.rol === "estudiante").forEach(u => {
+      const key = u.nombre_usuario
+      mapa[key] = { nombreUsuario: key, nombre: u.nombre || u.nombre_usuario, correo: u.correo || u.nombre_usuario, intentos: [], completados: 0, pendientes: 0, ayudas_total: 0 }
+    })
+    // Agregar intentos
     intentos.forEach(it => {
-      const u = it.usuario || "desconocido"
-      if (!mapa[u]) mapa[u] = { nombre: u, intentos: [], completados: 0, pendientes: 0, ayudas_total: 0 }
-      mapa[u].intentos.push(it)
-      if (it.estado === "aprobado" || it.porcentaje === 100) mapa[u].completados++
-      else mapa[u].pendientes++
-      mapa[u].ayudas_total += it.ayudas_pedidas || 0
+      const key = it.usuario || "desconocido"
+      if (!mapa[key]) mapa[key] = { nombreUsuario: key, nombre: key, correo: key, intentos: [], completados: 0, pendientes: 0, ayudas_total: 0 }
+      mapa[key].intentos.push(it)
+      if (it.estado === "aprobado" || it.porcentaje === 100) mapa[key].completados++
+      else mapa[key].pendientes++
+      mapa[key].ayudas_total += it.ayudas_pedidas || 0
     })
     return Object.values(mapa).sort((a, b) => a.nombre.localeCompare(b.nombre))
-  }, [intentos])
+  }, [intentos, usuarios])
+
+  // Promedio de notas de un perfil
+  const promedioNota = (intentosLista) => {
+    const ev = intentosLista.filter(it => it.nota != null)
+    if (!ev.length) return null
+    return (ev.reduce((s, it) => s + it.nota, 0) / ev.length).toFixed(1)
+  }
+
+  // Perfiles filtrados por búsqueda y filtro de estado
+  const perfilesFiltrados = useMemo(() => {
+    let lista = perfilesEstudiantes
+    if (busquedaEst.trim()) {
+      const q = busquedaEst.toLowerCase()
+      lista = lista.filter(p => p.nombre.toLowerCase().includes(q) || p.correo.toLowerCase().includes(q))
+    }
+    if (filtroEst === "pendientes") lista = lista.filter(p => p.pendientes > 0)
+    if (filtroEst === "aprobados")  lista = lista.filter(p => p.completados > 0)
+    if (filtroEst === "sin_notas")  lista = lista.filter(p => p.intentos.some(it => !it.tiene_evaluacion && (it.estado === "aprobado" || it.porcentaje === 100)))
+    return lista
+  }, [perfilesEstudiantes, filtroEst, busquedaEst])
 
   // Intentos del perfil activo, ordenados
   const intentosPerfil = useMemo(() => {
@@ -335,6 +417,17 @@ export default function PanelDocente() {
       return ordenDesc ? db - da : da - db
     })
   }, [perfilActivo, intentos, ordenDesc])
+
+  const cargarEntregasPerfil = async (nombreUsuario) => {
+    try {
+      const r = await fetch(
+        `${API_URL}/docente/estudiante/${encodeURIComponent(nombreUsuario)}/entregas`,
+        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
+      )
+      const d = await r.json()
+      if (r.ok) setEntregasPerfil(Array.isArray(d) ? d : [])
+    } catch { /* silencioso */ }
+  }
 
   const abrirEval = (it) => {
     setMensaje("")
@@ -390,23 +483,175 @@ export default function PanelDocente() {
 
   const crearUsuario = async (e) => {
     e.preventDefault(); if (!esAdmin) return
-    if (!nuevoU.trim() || !nuevaC.trim()) { setMensaje("Completa usuario y contraseña"); return }
+    if (!nuevoU.trim()) { setMensaje("Ingresa el nombre completo"); return }
+    if (!nuevoCorreo.trim() || !nuevoCorreo.includes("@")) { setMensaje("Ingresa un correo electrónico válido"); return }
+    if (!nuevaC.trim()) { setMensaje("Ingresa una contraseña"); return }
     setMensaje(""); setCargando(true)
     try {
       const r = await fetch(`${API_URL}/admin/crear-usuario`, {
         method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
-          nombre_usuario_admin: nombreUsuario,
-          nombre_usuario: nuevoU.trim(),
-          contrasena: nuevaC, rol: nuevoR
+          nombre: nuevoU.trim(),
+          correo: nuevoCorreo.trim().toLowerCase(),
+          contrasena: nuevaC,
+          rol: nuevoR,
         })
       })
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
       setMensaje(d?.mensaje || "Usuario creado")
-      setNuevoU(""); setNuevaC(""); setNuevoR("estudiante")
+      setNuevoU(""); setNuevaC(""); setNuevoR("estudiante"); setNuevoCorreo("")
       await cargarUsuarios()
     } catch { setMensaje("No se pudo conectar con el backend") }
+    finally { setCargando(false) }
+  }
+
+  const eliminarUsuario = async (nombreU) => {
+    setMensaje(""); setCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/admin/eliminar-usuario`, {
+        method: "DELETE", headers: getAuthHeaders(),
+        body: JSON.stringify({ nombre_usuario: nombreU, nombre_usuario_admin: nombreUsuario })
+      })
+      const d = await r.json()
+      if (!r.ok) { setMensaje(extraerError(d)); return }
+      setMensaje(d?.mensaje || "Usuario eliminado correctamente")
+      setConfirmEliminar(null)
+      await cargarUsuarios()
+    } catch { setMensaje("No se pudo conectar con el backend") }
+    finally { setCargando(false) }
+  }
+
+  const cargarEjercicios = async () => {
+    setCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente`, { headers: getAuthHeaders() })
+      const d = await r.json()
+      if (r.ok) setEjercicios(Array.isArray(d) ? d : [])
+      else setMensaje(extraerError(d))
+    } catch { setMensaje("No se pudo cargar ejercicios") }
+    finally { setCargando(false) }
+  }
+
+  const cargarEntregasEj = async (ejId) => {
+    setCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente/${ejId}/entregas`, { headers: getAuthHeaders() })
+      const d = await r.json()
+      if (r.ok) setEntregasEj(Array.isArray(d) ? d : [])
+      else setMensaje(extraerError(d))
+    } catch { setMensaje("No se pudo cargar entregas") }
+    finally { setCargando(false) }
+  }
+
+  const crearEjercicio = async (e) => {
+    e.preventDefault()
+    if (!ejTitulo.trim() || !ejDescripcion.trim()) { setMensaje("Título y descripción son obligatorios"); return }
+    const itemsValidos = ejItems.map((d, i) => ({ descripcion: d.trim(), orden: i + 1 })).filter(it => it.descripcion)
+    setMensaje(""); setCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente/crear`, {
+        method: "POST", headers: getAuthHeaders(),
+        body: JSON.stringify({
+          titulo: ejTitulo.trim(),
+          descripcion: ejDescripcion.trim(),
+          instrucciones: ejInstrucciones.trim() || null,
+          tipo: ejTipo,
+          nivel: Number(ejNivel) || 1,
+          tiempo_minutos: Number(ejTiempo) || 10,
+          items: itemsValidos,
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setMensaje(extraerError(d)); return }
+      setMensaje("Ejercicio creado correctamente")
+      setEjTitulo(""); setEjDescripcion(""); setEjInstrucciones(""); setEjItems([""]); setEjTipo("ataque"); setEjNivel(1); setEjTiempo(10)
+      setVistaEjercicios("lista")
+      await cargarEjercicios()
+    } catch { setMensaje("No se pudo conectar con el servidor") }
+    finally { setCargando(false) }
+  }
+
+  const eliminarEjercicio = async (id) => {
+    if (!confirm("¿Eliminar este ejercicio?")) return
+    setMensaje(""); setCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente/${id}`, { method: "DELETE", headers: getAuthHeaders() })
+      const d = await r.json()
+      if (!r.ok) { setMensaje(extraerError(d)); return }
+      setMensaje("Ejercicio eliminado")
+      await cargarEjercicios()
+    } catch { setMensaje("No se pudo conectar") }
+    finally { setCargando(false) }
+  }
+
+  // Contexto por nivel para guiar la IA — comandos y dificultad apropiados
+  const CONTEXTO_NIVELES_IA = {
+    ataque: {
+      1: "Nivel 1 — Introducción y fundamentos. Dificultad MUY BAJA. Solo comandos básicos: show alerts, show events, block ip, whoami, status, ip a, ls. Conceptos: alertas IDS, log de eventos, bloqueo IP elemental. NO usar comandos de niveles superiores.",
+      2: "Nivel 2 — Escaneo de puertos. Dificultad BAJA. Comandos: show services, scan ports, show traffic, show events, show alerts, block ip, show blocked. Conceptos: reconocimiento básico, identificar puertos abiertos.",
+      3: "Nivel 3 — Enumeración de servicios. Dificultad BAJA-MEDIA. Comandos: show banners, resolve host, show services, show events, block ip, show blocked. Conceptos: banners de servicios, versiones de software expuestas.",
+      4: "Nivel 4 — Superficie de ataque. Dificultad MEDIA. Comandos: show vulnerabilities, trace ip, show traffic, show alerts, block ip. Conceptos: vulnerabilidades detectadas, trazado de rutas.",
+      5: "Nivel 5 — Fuerza bruta avanzada. Dificultad MEDIA-ALTA. Comandos: show failed logins, show sessions, show users, show traffic, block ip, show blocked. Conceptos: intentos fallidos de autenticación, sesiones activas.",
+      6: "Nivel 6 — Ataque multi-etapa. Dificultad ALTA. Comandos: show processes, enumerate users, show failed logins, show alerts, block ip, export report. Conceptos: múltiples vectores simultáneos.",
+      7: "Nivel 7 — Operación completa de pentesting. Dificultad MUY ALTA. Todos los comandos disponibles: show hosts, enumerate services, history, export report, más todos los de niveles anteriores. Operación end-to-end sin asistencia.",
+    },
+    defensa: {
+      1: "Nivel 1 — Monitoreo básico SOC. Dificultad MUY BAJA. Comandos: eventos, alertas, estado-sistema, whoami. Conceptos básicos de monitoreo. NO usar comandos avanzados.",
+      2: "Nivel 2 — Detección de fuerza bruta. Dificultad BAJA. Comandos: eventos fuerza-bruta, logs auth, analizar-ip, bloquear-ip, estado-firewall, ips-bloqueadas.",
+      3: "Nivel 3 — Reconocimiento y escaneo defensivo. Dificultad BAJA-MEDIA. Comandos: eventos escaneo, trafico-ip, logs firewall, bloquear-ip, estado-sistema.",
+      4: "Nivel 4 — Investigación de incidentes. Dificultad MEDIA. Comandos: alertas criticas, correlacionar, historial-ip, logs auth, bloquear-ip, estado-sistema.",
+      5: "Nivel 5 — Respuesta defensiva activa. Dificultad MEDIA-ALTA. Comandos: estado-sistema, alertas activas, bloquear-ip, estado-firewall, eventos recientes, estado-servidor.",
+      6: "Nivel 6 — Escenarios multi-vector. Dificultad ALTA. Múltiples IPs, correlación avanzada, todos los comandos de logs y análisis.",
+      7: "Nivel 7 — Defensa integral autónoma. Dificultad MUY ALTA. Todos los comandos SOC incluyendo generar-reporte. Operación completa sin asistencia.",
+    },
+  }
+
+  const usarIa = async () => {
+    if (!ejTitulo.trim()) { setMensaje("Escribe primero el título del ejercicio"); return }
+    setCargandoIa(true); setMensaje("")
+    const nivelNum = Number(ejNivel) || 1
+    const contextoNivel = CONTEXTO_NIVELES_IA[ejTipo]?.[nivelNum] || ""
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente/ia-asistir`, {
+        method: "POST", headers: getAuthHeaders(),
+        body: JSON.stringify({
+          titulo: ejTitulo.trim(),
+          tipo: ejTipo,
+          nivel: nivelNum,
+          num_puntos: Number(iaNumPuntos) || 4,
+          contexto_nivel: contextoNivel,
+        }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setMensaje(d?.detail || "Error con la IA"); return }
+      if (d.descripcion) setEjDescripcion(d.descripcion)
+      if (d.instrucciones) setEjInstrucciones(d.instrucciones)
+      if (Array.isArray(d.items) && d.items.length > 0) setEjItems(d.items)
+      setModalIa(false)
+      setMensaje("✓ La IA rellenó el ejercicio. Revisa y ajusta si lo necesitas.")
+    } catch { setMensaje("No se pudo conectar con la IA") }
+    finally { setCargandoIa(false) }
+  }
+
+  const evaluarEntrega = async (e) => {
+    e.preventDefault()
+    if (!modalEntrega) return
+    const notaNum = parseFloat(notaEntrega)
+    if (isNaN(notaNum) || notaNum < 1 || notaNum > 7) { setMensaje("Nota debe ser 1.0–7.0"); return }
+    setMensaje(""); setCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente/entregas/${modalEntrega.id}/evaluar`, {
+        method: "POST", headers: getAuthHeaders(),
+        body: JSON.stringify({ nota: notaNum, comentarios: comentariosEntrega || null }),
+      })
+      const d = await r.json()
+      if (!r.ok) { setMensaje(extraerError(d)); return }
+      setMensaje("Entrega evaluada")
+      setModalEntrega(null); setNotaEntrega(""); setComentariosEntrega("")
+      if (perfilActivo) await cargarEntregasPerfil(perfilActivo)
+      if (ejSeleccionado) await cargarEntregasEj(ejSeleccionado.id)
+    } catch { setMensaje("No se pudo conectar") }
     finally { setCargando(false) }
   }
 
@@ -417,73 +662,133 @@ export default function PanelDocente() {
 
           <BarraSuperior paginaActiva="panel" />
 
-          <header className="hero-panel">
-            <div>
-              <div className="hero-badge">PANEL DE GESTIÓN CYBERLAB</div>
-              <h1 style={{ margin:"8px 0 4px", fontSize:22, color:"#fff", fontFamily:"var(--sans)", fontWeight:700 }}>
-                Administración y evaluación
-              </h1>
-              <p className="hero-subtitle">
-                Sesión: <strong style={{ color:"var(--primario-dim)" }}>{nombreUsuario}</strong>
-                {" — "} Rol: <strong style={{ color:"var(--terciario-dim)" }}>{rolUsuario || "N/D"}</strong>
-              </p>
+          {/* ── HEADER estilo mockup ── */}
+          <header style={{
+            background: "linear-gradient(135deg, #1c1c1e 0%, #242426 100%)",
+            border: "1px solid #2c2c2e",
+            borderRadius: 18,
+            padding: "28px 32px",
+            boxShadow: "0 4px 24px rgba(0,0,0,0.50)",
+          }}>
+            <div style={{ marginBottom: 6 }}>
+              <span style={{
+                fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
+                letterSpacing: "0.08em", textTransform: "uppercase",
+                background: "rgba(41,151,255,0.14)", color: "#2997ff",
+                border: "1px solid rgba(41,151,255,0.28)", borderRadius: 999,
+                padding: "4px 12px",
+              }}>PANEL DE GESTIÓN CYBERLAB</span>
             </div>
+            <h1 style={{ margin:"10px 0 4px", fontSize:26, color:"#f5f5f7", fontFamily:"var(--sans)", fontWeight:800, letterSpacing:"-0.5px" }}>
+              Administración y evaluación
+            </h1>
+            <p style={{ margin:0, fontSize:15, color:"#8e8e93" }}>
+              Sesión: <strong style={{ color:"#6db8ff" }}>{nombreUsuario}</strong>
+              {" — "} Rol: <strong style={{ color:"#86efac" }}>{rolUsuario || "N/D"}</strong>
+            </p>
           </header>
 
-          {/* Tabs */}
-          <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
-            <button
-              className={`btn-secundario ${tab==="estudiantes"?"activo":""}`}
-              onClick={() => { setTab("estudiantes"); setPerfilActivo(null) }}
-            >
-              👤 Estudiantes
-            </button>
-            {esAdmin && (
+          {/* ── TABS estilo mockup ── */}
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            {[
+              { id:"estudiantes", label:"👤 Estudiantes", onClick: () => { setTab("estudiantes"); setPerfilActivo(null) } },
+              { id:"ejercicios",  label:"📝 Ejercicios",  onClick: () => { setTab("ejercicios"); setVistaEjercicios("lista"); setEjSeleccionado(null); setMensaje("") } },
+              ...(esAdmin ? [{ id:"usuarios", label:"⚙ Usuarios", onClick: () => setTab("usuarios") }] : []),
+            ].map(t => (
               <button
-                className={`btn-secundario ${tab==="usuarios"?"activo":""}`}
-                onClick={() => setTab("usuarios")}
+                key={t.id}
+                onClick={t.onClick}
+                style={{
+                  padding:"10px 20px", borderRadius:980, border:"none",
+                  background: tab === t.id ? "#2997ff" : "rgba(255,255,255,0.06)",
+                  color: tab === t.id ? "#fff" : "#aeaeb2",
+                  fontWeight:700, fontSize:14, cursor:"pointer",
+                  fontFamily:"var(--cuerpo)",
+                  boxShadow: tab === t.id ? "0 4px 16px rgba(41,151,255,0.30)" : "none",
+                  transition:"all 0.2s",
+                }}
               >
-                ⚙ Usuarios
+                {t.label}
               </button>
-            )}
+            ))}
           </div>
 
           {mensaje && (
             <div style={{
-              padding:"10px 14px", background:"rgba(0,163,255,0.08)",
-              border:"1px solid rgba(0,163,255,0.20)", borderRadius:8,
-              fontSize:13, color:"var(--primario-dim)", marginBottom:12
+              padding:"12px 16px", background:"rgba(41,151,255,0.08)",
+              border:"1px solid rgba(41,151,255,0.22)", borderRadius:12,
+              fontSize:13, color:"#6db8ff",
             }}>{mensaje}</div>
           )}
 
           {/* ── TAB: Lista de perfiles ── */}
           {tab === "estudiantes" && !perfilActivo && (
-            <div className="panel-body">
+            <div className="card-mock" style={{ padding:"20px 24px" }}>
               <div className="panel-section-title">
                 Perfiles de estudiantes
-                <span className="panel-section-count">{perfilesEstudiantes.length} registrados</span>
+                <span className="panel-section-count">{perfilesFiltrados.length} / {perfilesEstudiantes.length}</span>
               </div>
+
+              {/* Filtros */}
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
+                <input
+                  className="campo-inicio"
+                  style={{ flex:1, minWidth:160, padding:"7px 12px", fontSize:13 }}
+                  placeholder="Buscar por nombre o correo..."
+                  value={busquedaEst}
+                  onChange={e => setBusquedaEst(e.target.value)}
+                />
+                {[
+                  { val:"todos",      label:"Todos" },
+                  { val:"sin_notas",  label:"Pendientes de nota" },
+                  { val:"aprobados",  label:"Con ejercicios" },
+                  { val:"pendientes", label:"Sin completar" },
+                ].map(f => (
+                  <button key={f.val}
+                    onClick={() => setFiltroEst(f.val)}
+                    style={{
+                      padding:"6px 12px", borderRadius:8, fontSize:12, fontWeight:600, cursor:"pointer",
+                      background: filtroEst === f.val ? "var(--primario)" : "rgba(255,255,255,0.06)",
+                      border: filtroEst === f.val ? "1px solid var(--primario)" : "1px solid rgba(255,255,255,0.10)",
+                      color: filtroEst === f.val ? "#000" : "var(--texto-apagado)",
+                    }}
+                  >{f.label}</button>
+                ))}
+              </div>
+
               {cargando && <div className="panel-cargando">Cargando...</div>}
-              {perfilesEstudiantes.length === 0 && !cargando && (
-                <div className="panel-vacio">No hay intentos registrados aún.</div>
+              {perfilesFiltrados.length === 0 && !cargando && (
+                <div className="panel-vacio">No hay estudiantes que coincidan con el filtro.</div>
               )}
               <div className="perfiles-grid">
-                {perfilesEstudiantes.map(p => (
-                  <button key={p.nombre} className="perfil-card" onClick={() => setPerfilActivo(p.nombre)}>
-                    <div className="perfil-avatar">{p.nombre[0]?.toUpperCase()}</div>
-                    <div className="perfil-info">
-                      <div className="perfil-nombre">{p.nombre}</div>
-                      <div className="perfil-stats">
-                        <span className="perfil-stat verde">✓ {p.completados} completados</span>
-                        <span className="perfil-stat gris">○ {p.pendientes} pendientes</span>
-                        {p.ayudas_total > 0 && (
-                          <span className="perfil-stat amarillo">💡 {p.ayudas_total} ayudas</span>
-                        )}
+                {perfilesFiltrados.map(p => {
+                  const prom = promedioNota(p.intentos)
+                  const pendNota = p.intentos.filter(it => !it.tiene_evaluacion && (it.estado === "aprobado" || it.porcentaje === 100)).length
+                  return (
+                    <button key={p.correo || p.nombre} className="perfil-card" onClick={() => {
+                        const key = p.nombreUsuario || p.correo || p.nombre
+                        setPerfilActivo(key)
+                        setEntregasPerfil([])
+                        cargarEntregasPerfil(key)
+                      }}>
+                      <div className="perfil-avatar">{(p.nombre[0] || "?").toUpperCase()}</div>
+                      <div className="perfil-info">
+                        <div className="perfil-nombre">{p.nombre}</div>
+                        <div style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginBottom:4 }}>{p.correo}</div>
+                        <div className="perfil-stats">
+                          <span className="perfil-stat verde">✓ {p.completados}</span>
+                          {pendNota > 0 && <span className="perfil-stat amarillo">📋 {pendNota} sin nota</span>}
+                          {prom !== null && (
+                            <span style={{ fontSize:11, fontWeight:700, color: prom >= 4 ? "var(--terciario-dim)" : "#ffb4ab", fontFamily:"var(--mono)" }}>
+                              prom {prom}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <span className="perfil-arrow">›</span>
-                  </button>
-                ))}
+                      <span className="perfil-arrow">›</span>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -491,24 +796,332 @@ export default function PanelDocente() {
           {/* ── TAB: Detalle de perfil — vista por niveles ── */}
           {tab === "estudiantes" && perfilActivo && (
             <PanelPerfilNiveles
-              nombreEstudiante={perfilActivo}
+              nombreEstudiante={perfilesEstudiantes.find(p => (p.nombreUsuario || p.correo || p.nombre) === perfilActivo)?.correo || perfilActivo}
               intentos={intentosPerfil}
+              entregas={entregasPerfil}
               cargando={cargando}
               ordenDesc={ordenDesc}
               setOrdenDesc={setOrdenDesc}
-              onVolver={() => setPerfilActivo(null)}
+              onVolver={() => { setPerfilActivo(null); setEntregasPerfil([]) }}
               onEvaluar={abrirEval}
+              onEvaluarEntrega={(en) => {
+                setModalEntrega(en)
+                setNotaEntrega(en.nota != null ? String(en.nota) : "")
+                setComentariosEntrega(en.comentarios_docente || "")
+                setMensaje("")
+              }}
             />
+          )}
+
+          {/* ── TAB: Ejercicios docente ── */}
+          {tab === "ejercicios" && (
+            <div className="card-mock" style={{ padding:"20px 24px" }}>
+
+              {/* Sub-navegación */}
+              {vistaEjercicios !== "entregas" && (
+                <div style={{ display:"flex", gap:8, marginBottom:16 }}>
+                  <button
+                    className={`btn-secundario ${vistaEjercicios==="lista"?"activo":""}`}
+                    onClick={() => { setVistaEjercicios("lista"); setMensaje("") }}
+                  >Lista</button>
+                  <button
+                    className={`btn-secundario ${vistaEjercicios==="crear"?"activo":""}`}
+                    onClick={() => { setVistaEjercicios("crear"); setMensaje("") }}
+                  >+ Crear ejercicio</button>
+                </div>
+              )}
+
+              {/* Lista de ejercicios */}
+              {vistaEjercicios === "lista" && (
+                <>
+                  <div className="panel-section-title">
+                    Ejercicios publicados
+                    <span className="panel-section-count">{ejercicios.length}</span>
+                  </div>
+                  {cargando && <div className="panel-cargando">Cargando...</div>}
+                  {ejercicios.length === 0 && !cargando && (
+                    <div className="panel-vacio">No hay ejercicios creados aún. Usa "+ Crear ejercicio".</div>
+                  )}
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    {ejercicios.map(ej => (
+                      <div key={ej.id} style={{
+                        background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)",
+                        borderRadius:12, padding:"14px 18px",
+                        display:"flex", alignItems:"center", gap:14,
+                      }}>
+                        <div style={{ flex:1 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+                            <span style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--texto-apagado)", marginRight:2 }}>#{ej.numero}</span>
+                            <span style={{ fontWeight:700, fontSize:15, color:"#fff" }}>{ej.titulo}</span>
+                            <span style={{
+                              fontSize:10, padding:"2px 7px", borderRadius:4, fontWeight:700,
+                              background: ej.tipo === "ataque" ? "rgba(239,68,68,0.12)" : "rgba(0,218,243,0.12)",
+                              border: `1px solid ${ej.tipo === "ataque" ? "rgba(239,68,68,0.25)" : "rgba(0,218,243,0.25)"}`,
+                              color: ej.tipo === "ataque" ? "#ffb4ab" : "var(--terciario-dim)",
+                            }}>
+                              {ej.tipo === "ataque" ? "⚔ Ataque" : "🛡 Defensa"}
+                            </span>
+                          </div>
+                          <div style={{ fontSize:13, color:"var(--texto-secundario)", marginBottom:4 }}>{ej.descripcion}</div>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:4 }}>
+                            <span style={{
+                              fontSize:10, padding:"2px 8px", borderRadius:4, fontWeight:700,
+                              background: (ej.nivel||1) <= 2 ? "rgba(34,197,94,0.12)" : (ej.nivel||1) <= 4 ? "rgba(234,179,8,0.12)" : (ej.nivel||1) <= 6 ? "rgba(249,115,22,0.12)" : "rgba(239,68,68,0.12)",
+                              border: `1px solid ${(ej.nivel||1) <= 2 ? "rgba(34,197,94,0.30)" : (ej.nivel||1) <= 4 ? "rgba(234,179,8,0.30)" : (ej.nivel||1) <= 6 ? "rgba(249,115,22,0.30)" : "rgba(239,68,68,0.30)"}`,
+                              color: (ej.nivel||1) <= 2 ? "#86efac" : (ej.nivel||1) <= 4 ? "#fde047" : (ej.nivel||1) <= 6 ? "#fdba74" : "#ffb4ab",
+                            }}>
+                              Nv.{ej.nivel||1}
+                            </span>
+                            <span style={{ fontSize:11, color:"var(--texto-apagado)" }}>
+                              {ej.items.length} punto{ej.items.length !== 1 ? "s" : ""} · {ej.tiempo_minutos} min · Creado {ej.fecha_creacion ? new Date(ej.fecha_creacion).toLocaleDateString("es-CL") : "—"}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <button
+                            className="btn-evaluar"
+                            onClick={async () => {
+                              setEjSeleccionado(ej)
+                              setVistaEjercicios("entregas")
+                              setMensaje("")
+                              await cargarEntregasEj(ej.id)
+                            }}
+                          >
+                            Ver entregas
+                          </button>
+                          <button
+                            className="boton-secundario"
+                            style={{ padding:"6px 12px", fontSize:12 }}
+                            onClick={() => eliminarEjercicio(ej.id)}
+                            disabled={cargando}
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Crear ejercicio */}
+              {vistaEjercicios === "crear" && (
+                <>
+                  <div className="panel-section-title">Nuevo ejercicio</div>
+                  <form onSubmit={crearEjercicio} style={{ display:"grid", gap:12, maxWidth:640 }}>
+                    {/* Tipo, Nivel y Tiempo */}
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                      <div>
+                        <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Tipo *</label>
+                        <select className="campo-inicio" value={ejTipo} onChange={e => setEjTipo(e.target.value)}>
+                          <option value="ataque">⚔ Ataque (Pentesting)</option>
+                          <option value="defensa">🛡 Defensa (SOC / Blue Team)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Nivel de dificultad *</label>
+                        <select className="campo-inicio" value={ejNivel} onChange={e => setEjNivel(e.target.value)}>
+                          <option value={1}>Nivel 1 — Introducción</option>
+                          <option value={2}>Nivel 2 — Reconocimiento</option>
+                          <option value={3}>Nivel 3 — Enumeración</option>
+                          <option value={4}>Nivel 4 — Explotación básica</option>
+                          <option value={5}>Nivel 5 — Post-explotación</option>
+                          <option value={6}>Nivel 6 — Técnicas avanzadas</option>
+                          <option value={7}>Nivel 7 — Operación completa</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                      <div>
+                        <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Tiempo (minutos) *</label>
+                        <input
+                          className="campo-inicio"
+                          type="number" min="1" max="120"
+                          value={ejTiempo} onChange={e => setEjTiempo(e.target.value)}
+                        />
+                      </div>
+                      <div style={{ display:"flex", alignItems:"flex-end" }}>
+                        <div style={{ fontSize:12, color:"var(--texto-apagado)", padding:"8px 0", lineHeight:1.5 }}>
+                          {ejNivel <= 2 ? "🟢 Básico — comandos simples, guiado" :
+                           ejNivel <= 4 ? "🟡 Intermedio — herramientas específicas" :
+                           ejNivel <= 6 ? "🟠 Avanzado — técnicas complejas, evasión" :
+                           "🔴 Experto — end-to-end sin asistencia"}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Título *</label>
+                      <div style={{ display:"flex", gap:8 }}>
+                        <input
+                          className="campo-inicio"
+                          placeholder="Ej: Escaneo de red con Nmap"
+                          value={ejTitulo} onChange={e => setEjTitulo(e.target.value)}
+                          style={{ flex:1 }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setModalIa(true)}
+                          style={{
+                            flexShrink:0, padding:"0 14px",
+                            background:"linear-gradient(135deg,rgba(139,92,246,0.25),rgba(0,163,255,0.20))",
+                            border:"1px solid rgba(139,92,246,0.40)", borderRadius:8,
+                            color:"#c4b5fd", fontSize:12, fontWeight:700, cursor:"pointer",
+                            whiteSpace:"nowrap",
+                          }}
+                          title="Generar contenido con IA"
+                        >
+                          ✨ IA
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Descripción *</label>
+                      <textarea
+                        className="campo-inicio"
+                        placeholder="Breve descripción del objetivo del ejercicio"
+                        rows={3}
+                        value={ejDescripcion} onChange={e => setEjDescripcion(e.target.value)}
+                        style={{ resize:"vertical" }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Instrucciones detalladas</label>
+                      <textarea
+                        className="campo-inicio"
+                        placeholder="Pasos, herramientas recomendadas, contexto del escenario..."
+                        rows={5}
+                        value={ejInstrucciones} onChange={e => setEjInstrucciones(e.target.value)}
+                        style={{ resize:"vertical" }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:8, textTransform:"uppercase", letterSpacing:1 }}>
+                        Puntos a evaluar (checklist)
+                      </label>
+                      {ejItems.map((item, i) => (
+                        <div key={i} style={{ display:"flex", gap:6, marginBottom:6 }}>
+                          <input
+                            className="campo-inicio"
+                            placeholder={`Punto ${i+1}`}
+                            value={item}
+                            onChange={e => {
+                              const copia = [...ejItems]
+                              copia[i] = e.target.value
+                              setEjItems(copia)
+                            }}
+                            style={{ flex:1 }}
+                          />
+                          {ejItems.length > 1 && (
+                            <button type="button" className="boton-secundario"
+                              style={{ padding:"6px 10px", fontSize:12 }}
+                              onClick={() => setEjItems(ejItems.filter((_, j) => j !== i))}
+                            >✕</button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        className="boton-secundario"
+                        style={{ fontSize:12, padding:"6px 12px", marginTop:4 }}
+                        onClick={() => setEjItems([...ejItems, ""])}
+                      >+ Agregar punto</button>
+                    </div>
+                    {mensaje && (
+                      <div style={{ padding:"10px 14px", background:"rgba(0,163,255,0.08)", border:"1px solid rgba(0,163,255,0.20)", borderRadius:8, fontSize:13, color:"var(--primario-dim)" }}>
+                        {mensaje}
+                      </div>
+                    )}
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button className="boton-principal" type="submit" disabled={cargando}>
+                        {cargando ? "Guardando..." : "Publicar ejercicio"}
+                      </button>
+                      <button type="button" className="boton-secundario" onClick={() => setVistaEjercicios("lista")}>
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                </>
+              )}
+
+              {/* Entregas de un ejercicio */}
+              {vistaEjercicios === "entregas" && ejSeleccionado && (
+                <>
+                  <button className="btn-volver" onClick={() => { setVistaEjercicios("lista"); setEjSeleccionado(null) }} style={{ marginBottom:12 }}>
+                    ← Volver
+                  </button>
+                  <div className="panel-section-title">
+                    Entregas: {ejSeleccionado.titulo}
+                    <span className="panel-section-count">{entregasEj.length}</span>
+                  </div>
+                  {cargando && <div className="panel-cargando">Cargando...</div>}
+                  {entregasEj.length === 0 && !cargando && (
+                    <div className="panel-vacio">Ningún estudiante ha entregado este ejercicio aún.</div>
+                  )}
+                  <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                    {entregasEj.map(en => (
+                      <div key={en.id} style={{
+                        background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)",
+                        borderRadius:10, padding:"12px 16px",
+                        display:"flex", alignItems:"center", gap:14,
+                      }}>
+                        <div style={{ flex:1 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                            <strong style={{ color:"#fff" }}>{en.usuario}</strong>
+                            <span style={{
+                              fontSize:11, padding:"2px 8px", borderRadius:4, fontWeight:700,
+                              background: en.estado === "evaluado" ? "rgba(0,218,243,0.15)" : "rgba(255,200,0,0.12)",
+                              border: `1px solid ${en.estado === "evaluado" ? "rgba(0,218,243,0.30)" : "rgba(255,200,0,0.25)"}`,
+                              color: en.estado === "evaluado" ? "var(--terciario-dim)" : "#ffc107",
+                            }}>
+                              {en.estado === "evaluado" ? `Nota: ${en.nota}` : "Pendiente"}
+                            </span>
+                          </div>
+                          {(en.ayudas_pedidas || 0) > 0 && (
+                            <div style={{ fontSize:12, color:"#f59e0b", marginTop:2 }}>
+                              💡 {en.ayudas_pedidas} pista{en.ayudas_pedidas > 1 ? "s" : ""} solicitada{en.ayudas_pedidas > 1 ? "s" : ""}
+                            </div>
+                          )}
+                          {en.respuesta && (
+                            <div style={{ fontSize:12, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:4, maxHeight:60, overflow:"hidden", textOverflow:"ellipsis" }}>
+                              {en.respuesta.substring(0, 200)}{en.respuesta.length > 200 ? "…" : ""}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          className="btn-evaluar"
+                          onClick={() => {
+                            setModalEntrega(en)
+                            setNotaEntrega(en.nota != null ? String(en.nota) : "")
+                            setComentariosEntrega(en.comentarios_docente || "")
+                            setMensaje("")
+                          }}
+                        >
+                          {en.estado === "evaluado" ? "✏ Editar nota" : "📋 Evaluar"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {mensaje && vistaEjercicios !== "crear" && (
+                <div style={{ marginTop:12, padding:"10px 14px", background:"rgba(0,163,255,0.08)", border:"1px solid rgba(0,163,255,0.20)", borderRadius:8, fontSize:13, color:"var(--primario-dim)" }}>
+                  {mensaje}
+                </div>
+              )}
+            </div>
           )}
 
           {/* ── TAB: Usuarios ── */}
           {tab === "usuarios" && esAdmin && (
             <div className="panel-dos-col">
-              <div className="panel-body">
+              <div className="card-mock" style={{ padding:"20px 24px" }}>
                 <div className="panel-section-title">Crear usuario</div>
                 <form onSubmit={crearUsuario} style={{ display:"grid", gap:10 }}>
-                  <input className="campo-inicio" placeholder="Nombre de usuario"
+                  <input className="campo-inicio" placeholder="Nombre completo (ej: Juan Pérez)"
                     value={nuevoU} onChange={e => setNuevoU(e.target.value)}/>
+                  <input className="campo-inicio" placeholder="Correo electrónico" type="email"
+                    value={nuevoCorreo} onChange={e => setNuevoCorreo(e.target.value)}/>
                   <input className="campo-inicio" placeholder="Contraseña" type="password"
                     value={nuevaC} onChange={e => setNuevaC(e.target.value)}/>
                   <select className="campo-inicio" value={nuevoR} onChange={e => setNuevoR(e.target.value)}>
@@ -520,18 +1133,19 @@ export default function PanelDocente() {
                   </button>
                 </form>
               </div>
-              <div className="panel-body">
+              <div className="card-mock" style={{ padding:"20px 24px" }}>
                 <div className="panel-section-title">
                   Usuarios registrados
                   <span className="panel-section-count">{usuarios.length}</span>
                 </div>
                 <table className="panel-tabla">
-                  <thead><tr><th>ID</th><th>Usuario</th><th>Rol</th><th></th></tr></thead>
+                  <thead><tr><th>ID</th><th>Nombre</th><th>Correo</th><th>Rol</th><th></th></tr></thead>
                   <tbody>
                     {usuarios.map(u => (
                       <tr key={u.id}>
                         <td>{u.id}</td>
-                        <td><strong>{u.nombre_usuario}</strong></td>
+                        <td><strong>{u.nombre || u.nombre_usuario}</strong></td>
+                        <td style={{ fontSize: 12, color: "#8e8e93" }}>{u.correo || "—"}</td>
                         <td>
                           {editandoRolId === u.id ? (
                             <select
@@ -552,13 +1166,13 @@ export default function PanelDocente() {
                             }}>{u.rol}</span>
                           )}
                         </td>
-                        <td style={{ whiteSpace:"nowrap" }}>
+                        <td style={{ whiteSpace:"nowrap", display:"flex", gap:4, alignItems:"center" }}>
                           {editandoRolId === u.id ? (
                             <>
                               <button
                                 className="btn-evaluar"
-                                style={{ padding:"3px 10px", fontSize:11, marginRight:4 }}
-                                onClick={() => cambiarRol(u.nombre_usuario, rolEditValor)}
+                                style={{ padding:"3px 10px", fontSize:11 }}
+                                onClick={() => setConfirmRolModal({ nombre: u.nombre_usuario, nuevoRol: rolEditValor })}
                                 disabled={cargando}
                               >Guardar</button>
                               <button
@@ -568,11 +1182,18 @@ export default function PanelDocente() {
                               >✕</button>
                             </>
                           ) : (
-                            <button
-                              className="boton-secundario"
-                              style={{ padding:"3px 10px", fontSize:11 }}
-                              onClick={() => { setEditandoRolId(u.id); setRolEditValor(u.rol) }}
-                            >Cambiar rol</button>
+                            <>
+                              <button
+                                className="boton-secundario"
+                                style={{ padding:"3px 10px", fontSize:11 }}
+                                onClick={() => { setEditandoRolId(u.id); setRolEditValor(u.rol) }}
+                              >Cambiar rol</button>
+                              <button
+                                style={{ padding:"3px 10px", fontSize:11, borderRadius:6, border:"1px solid rgba(255,69,58,0.35)", background:"rgba(255,69,58,0.10)", color:"#ff453a", cursor:"pointer", fontWeight:600 }}
+                                onClick={() => setConfirmEliminar(u.nombre_usuario)}
+                                disabled={cargando}
+                              >Eliminar</button>
+                            </>
                           )}
                         </td>
                       </tr>
@@ -676,6 +1297,190 @@ export default function PanelDocente() {
           </div>
         </div>
       )}
+      {/* ── Modal confirmar cambio de rol ── */}
+      {confirmRolModal && (
+        <div className="modal-fondo" onClick={() => setConfirmRolModal(null)}>
+          <div className="modal-tarjeta" style={{ maxWidth:420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-cabecera">
+              <h3 className="modal-titulo">⚙ ¿Cambiar rol?</h3>
+              <button className="boton-secundario" onClick={() => setConfirmRolModal(null)}>✕</button>
+            </div>
+            <div className="modal-cuerpo" style={{ display:"grid", gap:16 }}>
+              <div style={{ background:"rgba(41,151,255,0.06)", border:"1px solid rgba(41,151,255,0.20)", borderRadius:12, padding:"16px 18px" }}>
+                <div style={{ fontSize:13, color:"#8e8e93", marginBottom:6 }}>Usuario</div>
+                <div style={{ fontSize:17, fontWeight:700, color:"#f5f5f7" }}>{confirmRolModal.nombre}</div>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                {[
+                  { l:"Nuevo rol", v: confirmRolModal.nuevoRol },
+                ].map(({ l, v }) => (
+                  <div key={l} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:10, padding:"11px 14px" }}>
+                    <div style={{ fontSize:10, fontFamily:"var(--mono)", color:"#6e6e73", letterSpacing:"0.06em", marginBottom:4 }}>{l}</div>
+                    <div style={{ fontSize:14, fontWeight:700, color:"#f5f5f7" }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <p style={{ margin:0, fontSize:13, color:"#8e8e93", lineHeight:1.6 }}>
+                Se cambiará el rol del usuario. Puede revertirse asignando otro rol.
+              </p>
+              <div style={{ display:"flex", gap:10 }}>
+                <button
+                  className="btn-evaluar"
+                  style={{ flex:1, padding:"13px 20px", fontSize:14, fontWeight:700 }}
+                  disabled={cargando}
+                  onClick={async () => {
+                    await cambiarRol(confirmRolModal.nombre, confirmRolModal.nuevoRol)
+                    setConfirmRolModal(null)
+                    setEditandoRolId(null)
+                  }}
+                >
+                  {cargando ? "Guardando..." : "Sí, cambiar rol"}
+                </button>
+                <button className="boton-secundario" style={{ flex:1, padding:"13px 20px", fontSize:14 }}
+                  onClick={() => setConfirmRolModal(null)}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal confirmar eliminar usuario ── */}
+      {confirmEliminar && (
+        <div className="modal-fondo" onClick={() => setConfirmEliminar(null)}>
+          <div className="modal-tarjeta" style={{ maxWidth:420 }} onClick={e => e.stopPropagation()}>
+            <div className="modal-cabecera">
+              <h3 className="modal-titulo" style={{ color:"#ff453a" }}>🗑 ¿Eliminar usuario?</h3>
+              <button className="boton-secundario" onClick={() => setConfirmEliminar(null)}>✕</button>
+            </div>
+            <div className="modal-cuerpo" style={{ display:"grid", gap:16 }}>
+              <div style={{ background:"rgba(255,69,58,0.06)", border:"1px solid rgba(255,69,58,0.25)", borderRadius:12, padding:"16px 18px" }}>
+                <div style={{ fontSize:13, color:"#8e8e93", marginBottom:6 }}>Usuario a eliminar</div>
+                <div style={{ fontSize:17, fontWeight:700, color:"#f5f5f7" }}>{confirmEliminar}</div>
+              </div>
+              <div style={{ background:"rgba(255,159,10,0.06)", border:"1px solid rgba(255,159,10,0.22)", borderRadius:10, padding:"12px 14px" }}>
+                <p style={{ margin:0, fontSize:13, color:"#fbbf24", lineHeight:1.6, fontWeight:600 }}>
+                  ⚠ Esta acción no se puede deshacer. La cuenta del usuario será eliminada del sistema.
+                </p>
+              </div>
+              <div style={{ display:"flex", gap:10 }}>
+                <button
+                  style={{ flex:1, padding:"13px 20px", fontSize:14, fontWeight:700, borderRadius:980, background:"#ff453a", color:"#fff", border:"none", cursor: cargando ? "not-allowed" : "pointer", opacity: cargando ? 0.6 : 1 }}
+                  disabled={cargando}
+                  onClick={() => eliminarUsuario(confirmEliminar)}
+                >
+                  {cargando ? "Eliminando..." : "Sí, eliminar"}
+                </button>
+                <button className="boton-secundario" style={{ flex:1, padding:"13px 20px", fontSize:14 }}
+                  onClick={() => setConfirmEliminar(null)}>
+                  No, cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal IA asistir ── */}
+      {modalIa && (
+        <div className="modal-fondo">
+          <div className="modal-tarjeta" style={{ maxWidth:420 }}>
+            <div className="modal-cabecera">
+              <h3 className="modal-titulo">✨ Generar ejercicio con IA</h3>
+              <button className="boton-secundario" onClick={() => setModalIa(false)}>Cerrar</button>
+            </div>
+            <div className="modal-cuerpo">
+              <p style={{ fontSize:13, color:"var(--texto-secundario)", marginTop:0, lineHeight:1.6 }}>
+                La IA generará el ejercicio para <strong style={{ color:"#fff" }}>Nivel {ejNivel}</strong> de <strong style={{ color:"#fff" }}>{ejTipo === "ataque" ? "⚔ Ataque" : "🛡 Defensa"}</strong> basándose en el título <strong style={{ color:"#fff" }}>"{ejTitulo || "(vacío)"}"</strong>.
+              </p>
+              {/* Descripción del nivel para que el docente sepa qué corresponde */}
+              <div style={{ fontSize:12, color:"#86efac", background:"rgba(48,209,88,0.06)", border:"1px solid rgba(48,209,88,0.20)", borderRadius:8, padding:"10px 12px", marginBottom:4, lineHeight:1.6 }}>
+                <strong style={{ color:"#30d158" }}>Nivel {ejNivel} — {ejTipo === "ataque" ? "Ataque" : "Defensa"}:</strong>{" "}
+                {CONTEXTO_NIVELES_IA[ejTipo]?.[Number(ejNivel)]?.split(". ").slice(1).join(". ") || ""}
+              </div>
+              <div style={{ fontSize:12, color:"var(--texto-apagado)", background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"8px 12px", marginBottom:4 }}>
+                ℹ️ La IA respetará la dificultad del nivel. Los estudiantes aprenden los comandos en la sección <strong style={{ color:"#fff" }}>Información</strong>.
+              </div>
+              <div style={{ marginBottom:14 }}>
+                <label style={{ display:"block", fontSize:11, fontFamily:"var(--mono)", fontWeight:700, color:"var(--texto-apagado)", letterSpacing:"0.06em", marginBottom:6 }}>
+                  ¿CUÁNTOS PUNTOS A EVALUAR?
+                </label>
+                <input
+                  className="campo-inicio"
+                  type="number" min="1" max="10"
+                  value={iaNumPuntos}
+                  onChange={e => setIaNumPuntos(e.target.value)}
+                />
+              </div>
+              {mensaje && <div style={{ fontSize:13, color:"#ffb4ab", marginBottom:10 }}>{mensaje}</div>}
+              <button
+                className="boton-principal"
+                onClick={usarIa}
+                disabled={cargandoIa || !ejTitulo.trim()}
+                style={{ width:"100%" }}
+              >
+                {cargandoIa ? "Generando..." : "Generar con IA"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal evaluar entrega ejercicio ── */}
+      {modalEntrega && (
+        <div className="modal-fondo">
+          <div className="modal-tarjeta" style={{ maxWidth:500 }}>
+            <div className="modal-cabecera">
+              <h3 className="modal-titulo">Evaluar entrega — {modalEntrega.usuario}</h3>
+              <button className="boton-secundario" onClick={() => { setModalEntrega(null); setMensaje("") }}>Cerrar</button>
+            </div>
+            <div className="modal-cuerpo">
+              {modalEntrega.respuesta && (
+                <div style={{
+                  background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)",
+                  borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize:12,
+                  color:"var(--texto-secundario)", fontFamily:"var(--mono)",
+                  maxHeight:160, overflowY:"auto", whiteSpace:"pre-wrap",
+                }}>
+                  {modalEntrega.respuesta}
+                </div>
+              )}
+              <form onSubmit={evaluarEntrega} style={{ display:"grid", gap:12 }}>
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontFamily:"var(--mono)", fontWeight:700, color:"var(--texto-apagado)", letterSpacing:"0.06em", marginBottom:6 }}>
+                    NOTA (1.0 — 7.0) *
+                  </label>
+                  <input
+                    className="campo-inicio"
+                    value={notaEntrega}
+                    onChange={e => setNotaEntrega(e.target.value)}
+                    placeholder="Ej: 5.5"
+                    type="number" min="1" max="7" step="0.1"
+                  />
+                </div>
+                <div>
+                  <label style={{ display:"block", fontSize:11, fontFamily:"var(--mono)", fontWeight:700, color:"var(--texto-apagado)", letterSpacing:"0.06em", marginBottom:6 }}>
+                    COMENTARIOS (opcional)
+                  </label>
+                  <textarea
+                    className="campo-inicio"
+                    style={{ minHeight:80, paddingTop:10, resize:"vertical" }}
+                    value={comentariosEntrega}
+                    onChange={e => setComentariosEntrega(e.target.value)}
+                    placeholder="Retroalimentación para el estudiante..."
+                  />
+                </div>
+                {mensaje && <div style={{ fontSize:13, color:"#ffb4ab" }}>{mensaje}</div>}
+                <button className="boton-principal" type="submit" disabled={cargando || !notaEntrega.trim()}>
+                  {cargando ? "Guardando..." : "Guardar evaluación"}
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
     </GuardSesion>
   )
 }

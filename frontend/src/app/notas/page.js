@@ -98,7 +98,7 @@ export default function PaginaNotas() {
                 Mis notas y retroalimentación
               </h1>
               <p className="hero-subtitle">
-                Estudiante: <strong style={{ color:"var(--primario-dim)" }}>{nombreUsuario}</strong>
+                Correo: <strong style={{ color:"var(--primario-dim)" }}>{nombreUsuario}</strong>
               </p>
             </div>
             <div style={{ display:"flex", gap:8, alignItems:"center" }}>

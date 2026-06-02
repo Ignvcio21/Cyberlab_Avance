@@ -7,9 +7,13 @@ Variables de entorno requeridas:
 """
 import os
 import urllib.request
+import urllib.error
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
+logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger("email_utils")
 _executor = ThreadPoolExecutor(max_workers=3)
 
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
@@ -19,7 +23,9 @@ APP_URL = os.getenv("APP_URL", "https://cyberlabavance.vercel.app")
 
 
 def _enviar_sync(to: str, subject: str, html: str):
+    _log.info("EMAIL: intentando enviar a %s | subject: %s", to, subject)
     if not SENDGRID_API_KEY:
+        _log.error("EMAIL: SENDGRID_API_KEY no configurada")
         return
     payload = json.dumps({
         "personalizations": [{"to": [{"email": to}]}],
@@ -36,13 +42,21 @@ def _enviar_sync(to: str, subject: str, html: str):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return resp.status
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            _log.info("EMAIL: enviado OK status=%s", resp.status)
+            return resp.status
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")
+        _log.error("EMAIL: HTTPError %s — %s", e.code, body)
+    except Exception as e:
+        _log.error("EMAIL: error inesperado — %s", e)
 
 
 def enviar_correo(to: str, subject: str, html: str):
     """Encola el envío en un hilo para no bloquear la respuesta HTTP."""
     if to and "@" in to:
+        _log.info("EMAIL: encolando correo para %s", to)
         _executor.submit(_enviar_sync, to, subject, html)
 
 

@@ -1,43 +1,37 @@
 """
 email_utils.py — Envío de correos transaccionales de CyberLab
-Usa Resend API (HTTP) — compatible con Railway que bloquea SMTP.
+Usa Gmail SMTP con SSL (puerto 465) — compatible con Railway.
 Variables de entorno requeridas:
-  RESEND_API_KEY  API key de resend.com
-  APP_URL         URL pública del frontend
+  SMTP_USER  correo Gmail remitente
+  SMTP_PASS  contraseña de aplicación de Google (16 caracteres)
+  APP_URL    URL pública del frontend
 """
 import os
-import urllib.request
-import urllib.error
-import json
+import smtplib
+import ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from concurrent.futures import ThreadPoolExecutor
 
 _executor = ThreadPoolExecutor(max_workers=3)
 
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
-EMAIL_FROM = "CyberLab <onboarding@resend.dev>"
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
 APP_URL = os.getenv("APP_URL", "https://cyberlabavance.vercel.app")
 
 
 def _enviar_sync(to: str, subject: str, html: str):
-    if not RESEND_API_KEY:
+    if not SMTP_USER or not SMTP_PASS:
         return
-    payload = json.dumps({
-        "from": EMAIL_FROM,
-        "to": [to],
-        "subject": subject,
-        "html": html,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read())
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = f"CyberLab <{SMTP_USER}>"
+    msg["To"] = to
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=10) as server:
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(SMTP_USER, to, msg.as_string())
 
 
 def enviar_correo(to: str, subject: str, html: str):

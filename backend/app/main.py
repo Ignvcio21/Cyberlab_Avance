@@ -45,7 +45,7 @@ from .schemas import (
     SolicitudRecuperarContrasena, SolicitudResetContrasena,
 )
 from .email_utils import (
-    correo_nuevo_ejercicio, correo_nota_asignada, correo_recuperar_contrasena,
+    correo_recuperar_contrasena,
 )
 from .auth import (
     hashear_contrasena, verificar_contrasena,
@@ -1625,16 +1625,6 @@ def crear_ejercicio_docente(
         Usuario.rol == "estudiante",
         Usuario.correo.isnot(None),
     ).all()
-    for est in estudiantes:
-        correo_nuevo_ejercicio(
-            destinatario=est.correo,
-            nombre_estudiante=est.nombre or est.nombre_usuario,
-            titulo_ejercicio=ejercicio.titulo,
-            tipo=ejercicio.tipo,
-            nivel=ejercicio.nivel,
-            tiempo_minutos=ejercicio.tiempo_minutos,
-        )
-
     return {"mensaje": "Ejercicio creado", "id": ejercicio.id}
 
 
@@ -1943,17 +1933,5 @@ def evaluar_entrega_ejercicio(
     entrega.estado = "evaluado"
     entrega.fecha_evaluacion = datetime.now(timezone.utc)
     bd.commit()
-
-    # Notificar al estudiante que su entrega fue evaluada
-    estudiante = bd.query(Usuario).filter(Usuario.id == entrega.usuario_id).first()
-    ejercicio_doc = bd.query(EjercicioDocente).filter(EjercicioDocente.id == entrega.ejercicio_id).first()
-    if estudiante and estudiante.correo and ejercicio_doc:
-        correo_nota_asignada(
-            destinatario=estudiante.correo,
-            nombre_estudiante=estudiante.nombre or estudiante.nombre_usuario,
-            titulo_ejercicio=ejercicio_doc.titulo,
-            nota=datos.nota,
-            comentarios=datos.comentarios,
-        )
 
     return {"mensaje": "Entrega evaluada"}

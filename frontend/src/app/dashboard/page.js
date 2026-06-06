@@ -484,6 +484,11 @@ export default function Dashboard() {
   const router  = useRouter()
   const termRef = useRef(null)
 
+  // Historial de comandos (↑↓ como bash)
+  const cmdHistRef   = useRef([])  // lista de comandos ejecutados
+  const cmdHistIdx   = useRef(-1)  // posición actual navegando (-1 = no navegando)
+  const cmdBorrador  = useRef("")  // guarda el texto en curso antes de navegar
+
   const [nombreUsuario, setNombreUsuario] = useState("")
   const [stats, setStats] = useState({
     total_eventos: 0, total_alertas: 0,
@@ -863,6 +868,12 @@ export default function Dashboard() {
     if (!inicioSes) { setInicioSes(Date.now()); setReporte(null) }
     const cmd  = comando.trim()
     const cmdN = cmd.toLowerCase()
+    // Guardar en historial de comandos (↑↓), evitar duplicados consecutivos
+    if (cmd && cmdHistRef.current[cmdHistRef.current.length - 1] !== cmd) {
+      cmdHistRef.current.push(cmd)
+    }
+    cmdHistIdx.current = -1
+    cmdBorrador.current = ""
     setComando("")
     const prompt = `cyberlab@kali:~$ ${cmd}`
     try {
@@ -1421,7 +1432,28 @@ export default function Dashboard() {
           </div>
           <form onSubmit={ejecutarComando} className="terminal-form" style={{ margin:"0 0 0", borderRadius:"0 0 18px 18px", borderLeft:"none", borderRight:"none", borderBottom:"none", borderTop:"1px solid rgba(57,211,83,0.14)" }}>
             <span className="terminal-prefix">cyberlab@kali:~$</span>
-            <input className="terminal-input" value={comando} onChange={e => setComando(e.target.value)}
+            <input className="terminal-input" value={comando}
+              onChange={e => { setComando(e.target.value); cmdHistIdx.current = -1 }}
+              onKeyDown={e => {
+                const hist = cmdHistRef.current
+                if (e.key === "ArrowUp") {
+                  e.preventDefault()
+                  if (!hist.length) return
+                  if (cmdHistIdx.current === -1) cmdBorrador.current = comando
+                  const next = Math.min(cmdHistIdx.current + 1, hist.length - 1)
+                  cmdHistIdx.current = next
+                  setComando(hist[hist.length - 1 - next] ?? "")
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault()
+                  if (cmdHistIdx.current <= 0) {
+                    cmdHistIdx.current = -1
+                    setComando(cmdBorrador.current)
+                  } else {
+                    cmdHistIdx.current -= 1
+                    setComando(hist[hist.length - 1 - cmdHistIdx.current] ?? "")
+                  }
+                }
+              }}
               placeholder="Escribe un comando..." autoComplete="off" spellCheck={false}
               style={{ color:"#c9d1d9", caretColor:"#39d353" }}/>
           </form>
@@ -1522,7 +1554,7 @@ export default function Dashboard() {
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 }}>
                   {[
                     { l:"Operador",     v:reporte.nombreUsuario },
-                    { l:"Tiempo total", v:`${reporte.duracionSegundos}s` },
+                    { l:"Tiempo total", v:fmt(reporte.duracionSegundos) },
                     { l:"Eventos gen.", v:reporte.totalEventos },
                     { l:"Alertas gen.", v:reporte.totalAlertas },
                     { l:"Ayudas pedidas", v:reporte.ayudas, warn:reporte.ayudas>0 },

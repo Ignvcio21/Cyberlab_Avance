@@ -40,7 +40,6 @@ function Modal({ abierto, onCerrar, titulo, children }) {
 export default function AnunciosPage() {
   const [anuncios, setAnuncios] = useState([])
   const [cargando, setCargando] = useState(true)
-  const [msg, setMsg] = useState({ texto: "", tipo: "" })
 
   // Modal nuevo/editar
   const [modalAbierto, setModalAbierto] = useState(false)
@@ -62,8 +61,7 @@ export default function AnunciosPage() {
   useEffect(() => { cargar() }, [])
 
   const mostrarMsg = (texto, tipo = "ok") => {
-    setMsg({ texto, tipo })
-    setTimeout(() => setMsg({ texto: "", tipo: "" }), 3500)
+    window.cyberToast?.(texto, tipo === "err" ? "err" : "ok")
   }
 
   const abrirNuevo = () => {
@@ -124,16 +122,6 @@ export default function AnunciosPage() {
               + Nuevo anuncio
             </button>
           </div>
-
-          {/* Mensaje flash */}
-          {msg.texto && (
-            <div style={{
-              padding: "10px 16px", borderRadius: 10, fontSize: 13, marginBottom: 20,
-              background: msg.tipo === "ok" ? "rgba(48,209,88,.1)" : "rgba(255,69,58,.1)",
-              border: `1px solid ${msg.tipo === "ok" ? "rgba(48,209,88,.25)" : "rgba(255,69,58,.25)"}`,
-              color: msg.tipo === "ok" ? "#30d158" : "#ff453a",
-            }}>{msg.texto}</div>
-          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 24, alignItems: "start" }}>
             {/* Lista */}

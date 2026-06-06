@@ -166,21 +166,21 @@ export default function InicioPlataforma() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 32 }}>
                 {(rolUsuario === "admin"
                   ? [
-                      { icon: "[usuarios]", titulo: "Gestión de usuarios", desc: "Crea, edita y elimina cuentas. Cambia roles y busca por nombre o correo.", ruta: "/panel", flecha: "Ir a usuarios →" },
-                      { icon: "[contenido]", titulo: "Editor de contenido", desc: "Edita los módulos teóricos de cada nivel directamente desde el panel.", ruta: "/admin", flecha: "Editar contenido →" },
-                      { icon: "[auditoría]", titulo: "Logs de auditoría", desc: "Revisa todas las acciones de usuarios con filtros y exportación CSV.", ruta: "/estadisticas", flecha: "Ver logs →" },
+                      { icon: "👥", titulo: "Gestión de usuarios", desc: "Crea, edita y elimina cuentas. Cambia roles y busca por nombre o correo.", ruta: "/panel", flecha: "Ir a usuarios →" },
+                      { icon: "📝", titulo: "Editor de contenido", desc: "Edita los módulos teóricos de cada nivel directamente desde el panel.", ruta: "/admin", flecha: "Editar contenido →" },
+                      { icon: "📋", titulo: "Logs de auditoría", desc: "Revisa todas las acciones de usuarios con filtros y exportación CSV.", ruta: "/estadisticas", flecha: "Ver logs →" },
                     ]
                   : [
-                      { icon: "[panel]", titulo: "Panel de estudiantes", desc: "Revisa intentos, evalúa entregas y asigna notas a tus estudiantes.", ruta: "/panel", flecha: "Ir al panel →" },
-                      { icon: "[ejercicios]", titulo: "Gestionar ejercicios", desc: "Crea, edita y administra los ejercicios del semestre con asistencia IA.", ruta: "/panel", flecha: "Ver ejercicios →" },
-                      { icon: "[estadísticas]", titulo: "Estadísticas del curso", desc: "Visualiza el rendimiento general, tasa de aprobación y exporta notas.", ruta: "/estadisticas", flecha: "Ver estadísticas →" },
+                      { icon: "👤", titulo: "Panel de estudiantes", desc: "Revisa intentos, evalúa entregas y asigna notas a tus estudiantes.", ruta: "/panel", flecha: "Ir al panel →" },
+                      { icon: "⚔️", titulo: "Gestionar ejercicios", desc: "Crea, edita y administra los ejercicios del semestre con asistencia IA.", ruta: "/panel", flecha: "Ver ejercicios →" },
+                      { icon: "◈", titulo: "Estadísticas del curso", desc: "Visualiza el rendimiento general, tasa de aprobación y exporta notas.", ruta: "/estadisticas", flecha: "Ver estadísticas →" },
                     ]
                 ).map(({ icon, titulo, desc, ruta, flecha }) => (
                   <div key={titulo} onClick={() => router.push(ruta)} style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderRadius: 16, padding: 24, display: "flex", flexDirection: "column", gap: 10, cursor: "pointer", transition: "border .18s, transform .15s" }}
                     onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,.22)"; e.currentTarget.style.transform = "translateY(-2px)" }}
                     onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,.10)"; e.currentTarget.style.transform = "translateY(0)" }}
                   >
-                    <div style={{ fontSize: 11, fontWeight: 700, fontFamily: "monospace", color: "#6e6e73" }}>{icon}</div>
+                    <div style={{ fontSize: 24 }}>{icon}</div>
                     <div style={{ fontSize: 15, fontWeight: 800, color: "#f5f5f7" }}>{titulo}</div>
                     <div style={{ fontSize: 12, color: "#aeaeb2", lineHeight: 1.55, flex: 1 }}>{desc}</div>
                     <div style={{ fontSize: 12, color: "#6e6e73", marginTop: 4 }}>{flecha}</div>

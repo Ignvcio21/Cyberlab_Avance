@@ -119,13 +119,12 @@ function TabDashboard() {
       {/* Cards resumen */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
         {[
-          { label: "Estudiantes", valor: stats.estudiantes, color: "#22c55e", icono: "usr" },
-          { label: "Docentes", valor: stats.docentes, color: "#2997ff", icono: "doc" },
-          { label: "Nota promedio", valor: stats.notaPromedio, color: "#f59e0b", icono: "avg" },
-          { label: "Tasa aprobación", valor: `${stats.tasaAprobacion}%`, color: "#a78bfa", icono: "apr" },
-        ].map(({ label, valor, color, icono }) => (
+          { label: "Estudiantes", valor: stats.estudiantes, color: "#22c55e" },
+          { label: "Docentes", valor: stats.docentes, color: "#2997ff" },
+          { label: "Nota promedio", valor: stats.notaPromedio, color: "#f59e0b" },
+          { label: "Tasa aprobación", valor: `${stats.tasaAprobacion}%`, color: "#a78bfa" },
+        ].map(({ label, valor, color }) => (
           <div key={label} style={{ ...estilos.card, borderTop: `3px solid ${color}` }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "monospace", letterSpacing: "0.1em", marginBottom: 10, opacity: 0.8 }}>[{icono}]</div>
             <div style={{ fontSize: 32, fontWeight: 900, color }}>{valor}</div>
             <div style={{ fontSize: 13, color: "#8b949e", marginTop: 4 }}>{label}</div>
           </div>

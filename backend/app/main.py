@@ -399,6 +399,19 @@ def iniciar_sistema():
         except Exception:
             pass
 
+        # Migración: columna fecha_limite en ejercicios_docente
+        try:
+            if dialect == "sqlite":
+                cols_ej = [row[1] for row in con.execute(text("PRAGMA table_info(ejercicios_docente)"))]
+            else:
+                cols_ej = [row[0] for row in con.execute(text(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name='ejercicios_docente'"
+                ))]
+            if "fecha_limite" not in cols_ej:
+                con.execute(text("ALTER TABLE ejercicios_docente ADD COLUMN fecha_limite TIMESTAMP WITH TIME ZONE"))
+        except Exception:
+            pass
+
     bd = SesionLocal()
     ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@gmail.com")
     ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
@@ -1723,6 +1736,8 @@ def crear_ejercicio_docente(
         nivel=datos.nivel,
         tiempo_minutos=datos.tiempo_minutos,
         contexto_generado=contexto_ia,
+        fecha_limite=datos.fecha_limite,
+        activo=datos.visible,
         creado_por_id=usuario_actual.id,
     )
     bd.add(ejercicio)
@@ -1744,7 +1759,12 @@ def listar_ejercicios_docente(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
-    ejercicios = bd.query(EjercicioDocente).filter(EjercicioDocente.activo == True).order_by(EjercicioDocente.fecha_creacion.asc()).all()
+    # Docente y admin ven todos (visibles + ocultos). Estudiante solo los visibles.
+    es_panel = usuario_actual.rol in ("docente", "admin")
+    query = bd.query(EjercicioDocente)
+    if not es_panel:
+        query = query.filter(EjercicioDocente.activo == True)
+    ejercicios = query.order_by(EjercicioDocente.fecha_creacion.asc()).all()
     resultado = []
     for idx, ej in enumerate(ejercicios, start=1):
         creador = bd.query(Usuario).filter(Usuario.id == ej.creado_por_id).first()
@@ -1759,6 +1779,7 @@ def listar_ejercicios_docente(
             "tiempo_minutos": ej.tiempo_minutos,
             "contexto_generado": ej.contexto_generado,
             "activo": ej.activo,
+            "fecha_limite": ej.fecha_limite.isoformat() if ej.fecha_limite else None,
             "creado_por": creador.nombre_usuario if creador else "desconocido",
             "fecha_creacion": ej.fecha_creacion.isoformat() if ej.fecha_creacion else None,
             "items": [{"id": it.id, "descripcion": it.descripcion, "orden": it.orden} for it in ej.items],
@@ -1772,13 +1793,16 @@ def ejercicios_por_tipo(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    from datetime import timezone as tz
     ejercicios = bd.query(EjercicioDocente).filter(
         EjercicioDocente.activo == True,
         EjercicioDocente.tipo == tipo,
     ).order_by(EjercicioDocente.fecha_creacion.asc()).all()
     resultado = []
+    ahora = datetime.now(tz.utc)
     for ej in ejercicios:
         creador = bd.query(Usuario).filter(Usuario.id == ej.creado_por_id).first()
+        plazo_vencido = bool(ej.fecha_limite and ahora > ej.fecha_limite)
         resultado.append({
             "id": ej.id,
             "titulo": ej.titulo,
@@ -1787,6 +1811,8 @@ def ejercicios_por_tipo(
             "tipo": ej.tipo,
             "nivel": ej.nivel,
             "tiempo_minutos": ej.tiempo_minutos,
+            "fecha_limite": ej.fecha_limite.isoformat() if ej.fecha_limite else None,
+            "plazo_vencido": plazo_vencido,
             "contexto_generado": ej.contexto_generado,
             "activo": ej.activo,
             "creado_por": creador.nombre_usuario if creador else "desconocido",
@@ -1894,6 +1920,22 @@ def detalle_ejercicio_docente(
     }
 
 
+@app.patch("/ejercicios-docente/{ejercicio_id}/visibilidad")
+def toggle_visibilidad_ejercicio(
+    ejercicio_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
+    if not ej:
+        raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+    ej.activo = not ej.activo
+    bd.commit()
+    return {"activo": ej.activo, "mensaje": "Visible" if ej.activo else "Oculto"}
+
+
 @app.delete("/ejercicios-docente/{ejercicio_id}")
 def eliminar_ejercicio_docente(
     ejercicio_id: int,
@@ -1905,7 +1947,7 @@ def eliminar_ejercicio_docente(
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
     if not ej:
         raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
-    ej.activo = False
+    bd.delete(ej)
     bd.commit()
     return {"mensaje": "Ejercicio eliminado"}
 
@@ -1917,9 +1959,12 @@ def entregar_ejercicio_docente(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    from datetime import timezone as tz
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id, EjercicioDocente.activo == True).first()
     if not ej:
-        raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+        raise HTTPException(status_code=404, detail="Ejercicio no encontrado o no visible")
+    if ej.fecha_limite and datetime.now(tz.utc) > ej.fecha_limite:
+        raise HTTPException(status_code=400, detail="El plazo de entrega ha vencido")
     entrega_existente = bd.query(EntregaEjercicioDocente).filter(
         EntregaEjercicioDocente.ejercicio_id == ejercicio_id,
         EntregaEjercicioDocente.usuario_id == usuario_actual.id,

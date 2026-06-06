@@ -3,16 +3,31 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 
+const TEXTO_TW = "cyberlab@kali:~$"
+
 export default function BarraSuperior({ paginaActiva }) {
   const router = useRouter()
   const [nombreUsuario, setNombreUsuario] = useState("")
   const [rolUsuario, setRolUsuario] = useState("")
+  const [twTexto, setTwTexto] = useState("")
+  const [twListo, setTwListo] = useState(false)
 
   useEffect(() => {
     const u = localStorage.getItem("nombre_display") || localStorage.getItem("nombre_usuario") || ""
     const r = localStorage.getItem("rol_usuario") || ""
     setNombreUsuario(u)
     setRolUsuario(r)
+  }, [])
+
+  // Animación typewriter al montar
+  useEffect(() => {
+    let i = 0
+    const iv = setInterval(() => {
+      i++
+      setTwTexto(TEXTO_TW.slice(0, i))
+      if (i === TEXTO_TW.length) { clearInterval(iv); setTwListo(true) }
+    }, 55)
+    return () => clearInterval(iv)
   }, [])
 
   const ir = (ruta) => router.push(ruta)
@@ -34,7 +49,16 @@ export default function BarraSuperior({ paginaActiva }) {
         <div className="marca-icono">CL</div>
         <div className="marca-texto">
           <div className="marca-nombre">CyberLab</div>
-          <div className="marca-subtitulo">cyberlab@kali:~$</div>
+          <div className="marca-subtitulo" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>
+            {twTexto}
+            <span style={{
+              display: "inline-block", width: 1, height: 11,
+              background: "#00daf3", marginLeft: 1,
+              verticalAlign: "middle",
+              animation: twListo ? "twCursor 1s step-end infinite" : "none",
+              opacity: twListo ? 1 : 1,
+            }} />
+          </div>
         </div>
       </div>
 
@@ -75,7 +99,6 @@ export default function BarraSuperior({ paginaActiva }) {
             Información
           </button>
         )}
-
 
         {puedeVerNotas && (
           <button
@@ -136,6 +159,13 @@ export default function BarraSuperior({ paginaActiva }) {
           Salir
         </button>
       </div>
+
+      <style>{`
+        @keyframes twCursor {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0; }
+        }
+      `}</style>
     </header>
   )
 }

@@ -223,6 +223,8 @@ class SolicitudCrearEjercicioDocente(BaseModel):
     tipo: str = "ataque"
     nivel: int = 1
     tiempo_minutos: int = 10
+    fecha_limite: datetime
+    visible: bool = False
     items: List[ItemEjercicioDocenteEntrada] = []
 
 
@@ -248,6 +250,7 @@ class EjercicioDocenteSalida(BaseModel):
     descripcion: str
     instrucciones: Optional[str] = None
     activo: bool
+    fecha_limite: Optional[datetime] = None
     creado_por: str
     fecha_creacion: datetime
     items: List[ItemEjercicioDocenteSalida] = []

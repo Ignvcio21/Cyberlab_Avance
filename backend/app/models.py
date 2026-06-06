@@ -290,7 +290,8 @@ class EjercicioDocente(Base):
     tiempo_minutos = Column(Integer, nullable=False, default=10)
     contexto_generado = Column(Text, nullable=True)  # escenario IA
     nivel = Column(Integer, nullable=False, default=1)  # 1-7
-    activo = Column(Boolean, default=True, nullable=False)
+    activo = Column(Boolean, default=False, nullable=False)
+    fecha_limite = Column(DateTime(timezone=True), nullable=True)
     creado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 

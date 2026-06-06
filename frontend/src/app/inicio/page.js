@@ -24,6 +24,30 @@ export default function InicioPlataforma() {
   const [anuncios, setAnuncios] = useState([])
   const [entregasPend, setEntregasPend] = useState([])
   const [statsDocente, setStatsDocente] = useState(null)
+  const [statsAnimadas, setStatsAnimadas] = useState({ estudiantes: 0, pendientes: 0, notaPromedio: 0, ejercicios: 0 })
+
+  // Contador animado easeOutCubic
+  const animarContador = (clave, target, decimales = 0, duracion = 1100) => {
+    if (!target || isNaN(Number(target))) return
+    const num = Number(target)
+    const inicio = performance.now()
+    const tick = (ahora) => {
+      const p = Math.min((ahora - inicio) / duracion, 1)
+      const ease = 1 - Math.pow(1 - p, 3)
+      setStatsAnimadas(prev => ({ ...prev, [clave]: (num * ease).toFixed(decimales) }))
+      if (p < 1) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }
+
+  // Lanzar animación cuando llegan los stats
+  useEffect(() => {
+    if (!statsDocente) return
+    animarContador("estudiantes",   statsDocente.estudiantes  ?? 0, 0, 900)
+    animarContador("pendientes",    statsDocente.pendientes   ?? 0, 0, 1000)
+    animarContador("notaPromedio",  statsDocente.notaPromedio ?? 0, 1, 1200)
+    animarContador("ejercicios",    statsDocente.ejercicios   ?? 0, 0, 800)
+  }, [statsDocente])
 
   const cargarProgreso = async (usuario, token) => {
     const API_URL = process.env.NEXT_PUBLIC_API_URL
@@ -123,10 +147,10 @@ export default function InicioPlataforma() {
             <section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 32px 36px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 32 }}>
                 {[
-                  { lbl: "Estudiantes", val: statsDocente?.estudiantes ?? "—", color: "#30d158", sub: "registrados" },
-                  { lbl: "Por corregir", val: statsDocente?.pendientes ?? "—", color: "#ff9f0a", sub: "esperando evaluación" },
-                  { lbl: "Nota promedio", val: statsDocente?.notaPromedio ?? "—", color: "#2997ff", sub: "del curso" },
-                  { lbl: "Ejercicios", val: statsDocente?.ejercicios ?? "—", color: "#5e5ce6", sub: "publicados" },
+                  { lbl: "Estudiantes", val: statsDocente ? statsAnimadas.estudiantes : "—", color: "#30d158", sub: "registrados" },
+                  { lbl: "Por corregir", val: statsDocente ? statsAnimadas.pendientes : "—", color: "#ff9f0a", sub: "esperando evaluación" },
+                  { lbl: "Nota promedio", val: statsDocente ? statsAnimadas.notaPromedio : "—", color: "#2997ff", sub: "del curso" },
+                  { lbl: "Ejercicios", val: statsDocente ? statsAnimadas.ejercicios : "—", color: "#5e5ce6", sub: "publicados" },
                 ].map(({ lbl, val, color, sub }) => (
                   <div key={lbl} style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderTop: `3px solid ${color}`, borderRadius: 14, padding: "20px 22px" }}>
                     <div style={{ fontSize: 30, fontWeight: 900, color, marginBottom: 4 }}>{val}</div>

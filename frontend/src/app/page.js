@@ -1,12 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL
 
 export default function InicioSesion() {
   const router = useRouter()
+  const canvasRef = useRef(null)
   const [modoRegistro, setModoRegistro] = useState(false)
   const [nombre, setNombre] = useState("")
   const [correo, setCorreo] = useState("")
@@ -58,6 +59,57 @@ export default function InicioSesion() {
     finally { setCargando(false) }
   }
 
+  // Canvas partículas
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    let animId
+    const resize = () => { canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight }
+    resize()
+    window.addEventListener("resize", resize)
+
+    const N = 55
+    const pts = Array.from({ length: N }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      vx: (Math.random() - 0.5) * 0.45,
+      vy: (Math.random() - 0.5) * 0.45,
+      r: Math.random() * 1.8 + 0.7,
+    }))
+
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      for (const p of pts) {
+        p.x += p.vx; p.y += p.vy
+        if (p.x < 0 || p.x > canvas.width)  p.vx *= -1
+        if (p.y < 0 || p.y > canvas.height) p.vy *= -1
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2)
+        ctx.fillStyle = "rgba(41,151,255,0.55)"
+        ctx.fill()
+      }
+      for (let i = 0; i < N; i++) {
+        for (let j = i + 1; j < N; j++) {
+          const dx = pts[i].x - pts[j].x
+          const dy = pts[i].y - pts[j].y
+          const d = Math.sqrt(dx * dx + dy * dy)
+          if (d < 110) {
+            ctx.beginPath()
+            ctx.moveTo(pts[i].x, pts[i].y)
+            ctx.lineTo(pts[j].x, pts[j].y)
+            ctx.strokeStyle = `rgba(41,151,255,${(1 - d / 110) * 0.18})`
+            ctx.lineWidth = 0.8
+            ctx.stroke()
+          }
+        }
+      }
+      animId = requestAnimationFrame(draw)
+    }
+    draw()
+    return () => { cancelAnimationFrame(animId); window.removeEventListener("resize", resize) }
+  }, [])
+
   const alternarModo = () => {
     setMensaje(""); setModoRegistro(v => !v)
     setContrasena(""); setConfirmarContrasena(""); setNombre("")
@@ -67,7 +119,8 @@ export default function InicioSesion() {
     <main style={{ minHeight: "100vh", background: "#141414", fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
       {/* ── LOGIN CARD ── */}
-      <section style={{ background: "#111113", padding: "60px 24px 60px", borderBottom: "1px solid #2c2c2e" }}>
+      <section style={{ background: "#111113", padding: "60px 24px 60px", borderBottom: "1px solid #2c2c2e", position: "relative", overflow: "hidden" }}>
+        <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
         <div id="login-card" style={{
           maxWidth: 420, margin: "0 auto",
           background: "#1c1c1e",
@@ -153,6 +206,7 @@ export default function InicioSesion() {
             <button
               type="submit"
               disabled={cargando}
+              className="login-btn-ripple"
               style={{
                 width: "100%", padding: "14px 16px", border: "none",
                 borderRadius: 980, background: "#2997ff", color: "white",

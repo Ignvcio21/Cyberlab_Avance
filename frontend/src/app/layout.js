@@ -1,6 +1,9 @@
 import { Manrope, Inter, JetBrains_Mono } from "next/font/google"
 import "./globals.css"
 import ProvedorTransiciones from "./componentes/ProvedorTransiciones"
+import Toaster from "./componentes/Toaster"
+import BarraProgreso from "./componentes/BarraProgreso"
+import RippleInit from "./componentes/RippleInit"
 
 const manrope = Manrope({
   variable: "--font-manrope",
@@ -36,6 +39,9 @@ export default function RootLayout({ children }) {
         <meta name="google" content="notranslate" />
       </head>
       <body className="min-h-full flex flex-col">
+        <BarraProgreso />
+        <Toaster />
+        <RippleInit />
         <ProvedorTransiciones>{children}</ProvedorTransiciones>
       </body>
     </html>

@@ -54,6 +54,32 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Toast ── */
+@keyframes toastIn {
+  from { transform: translateX(110%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes toastOut {
+  from { transform: translateX(0);    opacity: 1; }
+  to   { transform: translateX(110%); opacity: 0; }
+}
+
+/* ── Ripple ── */
+@keyframes cyberRipple {
+  to { transform: scale(1); opacity: 0; }
+}
+
+/* ── Cards escalonadas ── */
+.cyber-card-anim {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity .45s ease, transform .45s ease;
+}
+.cyber-card-anim.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 /* Entrada desde arriba */
 @keyframes fadeDown {
   from { opacity: 0; transform: translateY(-12px); }

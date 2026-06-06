@@ -314,6 +314,8 @@ export default function PanelDocente() {
   const [ejTipo,              setEjTipo]              = useState("ataque")
   const [ejNivel,             setEjNivel]             = useState(1)
   const [ejTiempo,            setEjTiempo]            = useState(10)
+  const [ejFechaLimite,       setEjFechaLimite]       = useState("")
+  const [ejVisible,           setEjVisible]           = useState(false)
   const [modalIa,             setModalIa]             = useState(false)
   const [iaNumPuntos,         setIaNumPuntos]         = useState(4)
   const [cargandoIa,          setCargandoIa]          = useState(false)
@@ -474,7 +476,7 @@ export default function PanelDocente() {
       })
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
-      setMensaje(d?.mensaje || "Rol actualizado")
+      window.cyberToast?.(d?.mensaje || "Rol actualizado", "ok")
       setEditandoRolId(null)
       await cargarUsuarios()
     } catch { setMensaje("No se pudo conectar con el backend") }
@@ -499,7 +501,7 @@ export default function PanelDocente() {
       })
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
-      setMensaje(d?.mensaje || "Usuario creado")
+      window.cyberToast?.(d?.mensaje || "Usuario creado", "ok")
       setNuevoU(""); setNuevaC(""); setNuevoR("estudiante"); setNuevoCorreo("")
       await cargarUsuarios()
     } catch { setMensaje("No se pudo conectar con el backend") }
@@ -515,7 +517,7 @@ export default function PanelDocente() {
       })
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
-      setMensaje(d?.mensaje || "Usuario eliminado correctamente")
+      window.cyberToast?.(d?.mensaje || "Usuario eliminado", "warn")
       setConfirmEliminar(null)
       await cargarUsuarios()
     } catch { setMensaje("No se pudo conectar con el backend") }
@@ -547,8 +549,9 @@ export default function PanelDocente() {
   const crearEjercicio = async (e) => {
     e.preventDefault()
     if (!ejTitulo.trim() || !ejDescripcion.trim()) { setMensaje("Título y descripción son obligatorios"); return }
+    if (!ejFechaLimite) { setMensaje("La fecha y hora límite de entrega es obligatoria"); return }
     const itemsValidos = ejItems.map((d, i) => ({ descripcion: d.trim(), orden: i + 1 })).filter(it => it.descripcion)
-    setMensaje(""); setCargando(true)
+    setMensaje(""); setCargando(true); window.cyberProgress?.start()
     try {
       const r = await fetch(`${API_URL}/ejercicios-docente/crear`, {
         method: "POST", headers: getAuthHeaders(),
@@ -559,30 +562,44 @@ export default function PanelDocente() {
           tipo: ejTipo,
           nivel: Number(ejNivel) || 1,
           tiempo_minutos: Number(ejTiempo) || 10,
+          fecha_limite: new Date(ejFechaLimite).toISOString(),
+          visible: ejVisible,
           items: itemsValidos,
         }),
       })
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
-      setMensaje("Ejercicio creado correctamente")
-      setEjTitulo(""); setEjDescripcion(""); setEjInstrucciones(""); setEjItems([""]); setEjTipo("ataque"); setEjNivel(1); setEjTiempo(10)
+      window.cyberToast?.("Ejercicio creado correctamente", "ok")
+      setEjTitulo(""); setEjDescripcion(""); setEjInstrucciones(""); setEjItems([""])
+      setEjTipo("ataque"); setEjNivel(1); setEjTiempo(10); setEjFechaLimite(""); setEjVisible(false)
       setVistaEjercicios("lista")
       await cargarEjercicios()
     } catch { setMensaje("No se pudo conectar con el servidor") }
-    finally { setCargando(false) }
+    finally { setCargando(false); window.cyberProgress?.end() }
   }
 
   const eliminarEjercicio = async (id) => {
-    if (!confirm("¿Eliminar este ejercicio?")) return
+    if (!confirm("¿Eliminar este ejercicio? Esta acción no se puede deshacer.")) return
     setMensaje(""); setCargando(true)
     try {
       const r = await fetch(`${API_URL}/ejercicios-docente/${id}`, { method: "DELETE", headers: getAuthHeaders() })
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
-      setMensaje("Ejercicio eliminado")
+      window.cyberToast?.("Ejercicio eliminado", "warn")
       await cargarEjercicios()
     } catch { setMensaje("No se pudo conectar") }
     finally { setCargando(false) }
+  }
+
+  const toggleVisibilidad = async (id) => {
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente/${id}/visibilidad`, { method: "PATCH", headers: getAuthHeaders() })
+      const d = await r.json()
+      if (!r.ok) { setMensaje(extraerError(d)); return }
+      // Actualizar localmente sin recargar toda la lista
+      setEjercicios(prev => prev.map(ej => ej.id === id ? { ...ej, activo: d.activo } : ej))
+      window.cyberToast?.(d.activo ? "Ejercicio publicado" : "Ejercicio ocultado", d.activo ? "ok" : "info")
+    } catch { setMensaje("No se pudo cambiar la visibilidad") }
   }
 
   // Contexto por nivel para guiar la IA — comandos y dificultad apropiados
@@ -629,7 +646,7 @@ export default function PanelDocente() {
       if (d.instrucciones) setEjInstrucciones(d.instrucciones)
       if (Array.isArray(d.items) && d.items.length > 0) setEjItems(d.items)
       setModalIa(false)
-      setMensaje("✓ La IA rellenó el ejercicio. Revisa y ajusta si lo necesitas.")
+      window.cyberToast?.("IA rellenó el ejercicio. Revisa y ajusta.", "info")
     } catch { setMensaje("No se pudo conectar con la IA") }
     finally { setCargandoIa(false) }
   }
@@ -639,7 +656,7 @@ export default function PanelDocente() {
     if (!modalEntrega) return
     const notaNum = parseFloat(notaEntrega)
     if (isNaN(notaNum) || notaNum < 1 || notaNum > 7) { setMensaje("Nota debe ser 1.0–7.0"); return }
-    setMensaje(""); setCargando(true)
+    setMensaje(""); setCargando(true); window.cyberProgress?.start()
     try {
       const r = await fetch(`${API_URL}/ejercicios-docente/entregas/${modalEntrega.id}/evaluar`, {
         method: "POST", headers: getAuthHeaders(),
@@ -647,12 +664,12 @@ export default function PanelDocente() {
       })
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
-      setMensaje("Entrega evaluada")
+      window.cyberToast?.(`Entrega evaluada — Nota ${notaNum.toFixed(1)}`, "ok")
       setModalEntrega(null); setNotaEntrega(""); setComentariosEntrega("")
       if (perfilActivo) await cargarEntregasPerfil(perfilActivo)
       if (ejSeleccionado) await cargarEntregasEj(ejSeleccionado.id)
     } catch { setMensaje("No se pudo conectar") }
-    finally { setCargando(false) }
+    finally { setCargando(false); window.cyberProgress?.end() }
   }
 
   return (
@@ -843,63 +860,124 @@ export default function PanelDocente() {
                     <div className="panel-vacio">No hay ejercicios creados aún. Usa "+ Crear ejercicio".</div>
                   )}
                   <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                    {ejercicios.map(ej => (
-                      <div key={ej.id} style={{
-                        background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)",
-                        borderRadius:12, padding:"14px 18px",
-                        display:"flex", alignItems:"center", gap:14,
-                      }}>
-                        <div style={{ flex:1 }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
-                            <span style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--texto-apagado)", marginRight:2 }}>#{ej.numero}</span>
-                            <span style={{ fontWeight:700, fontSize:15, color:"#fff" }}>{ej.titulo}</span>
-                            <span style={{
-                              fontSize:10, padding:"2px 7px", borderRadius:4, fontWeight:700,
-                              background: ej.tipo === "ataque" ? "rgba(239,68,68,0.12)" : "rgba(0,218,243,0.12)",
-                              border: `1px solid ${ej.tipo === "ataque" ? "rgba(239,68,68,0.25)" : "rgba(0,218,243,0.25)"}`,
-                              color: ej.tipo === "ataque" ? "#ffb4ab" : "var(--terciario-dim)",
-                            }}>
-                              {ej.tipo === "ataque" ? "⚔ Ataque" : "🛡 Defensa"}
+                    {ejercicios.map(ej => {
+                      const ahora = new Date()
+                      const limite = ej.fecha_limite ? new Date(ej.fecha_limite) : null
+                      const vencido = limite && ahora > limite
+                      const hoy = limite && !vencido && (limite - ahora) < 86400000 // < 24h
+                      const fmtLimite = limite ? limite.toLocaleString("es-CL", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) : null
+                      return (
+                        <div key={ej.id} style={{
+                          background:"rgba(255,255,255,0.03)",
+                          border:`1px solid ${ej.activo ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)"}`,
+                          borderRadius:12, padding:"14px 18px",
+                          display:"flex", alignItems:"center", gap:14,
+                          opacity: ej.activo ? 1 : 0.72,
+                          transition:"opacity .2s",
+                        }}>
+                          <div style={{ flex:1 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3, flexWrap:"wrap" }}>
+                              <span style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--texto-apagado)", marginRight:2 }}>#{ej.numero}</span>
+                              <span style={{ fontWeight:700, fontSize:15, color:"#fff" }}>{ej.titulo}</span>
+                              <span style={{
+                                fontSize:10, padding:"2px 7px", borderRadius:4, fontWeight:700,
+                                background: ej.tipo === "ataque" ? "rgba(239,68,68,0.12)" : "rgba(0,218,243,0.12)",
+                                border: `1px solid ${ej.tipo === "ataque" ? "rgba(239,68,68,0.25)" : "rgba(0,218,243,0.25)"}`,
+                                color: ej.tipo === "ataque" ? "#ffb4ab" : "var(--terciario-dim)",
+                              }}>
+                                {ej.tipo === "ataque" ? "⚔ Ataque" : "🛡 Defensa"}
+                              </span>
+                              {/* Badge visibilidad */}
+                              <span style={{
+                                fontSize:10, padding:"2px 8px", borderRadius:4, fontWeight:700,
+                                background: ej.activo ? "rgba(48,209,88,0.12)" : "rgba(255,255,255,0.06)",
+                                border: `1px solid ${ej.activo ? "rgba(48,209,88,0.25)" : "rgba(255,255,255,0.10)"}`,
+                                color: ej.activo ? "#30d158" : "#6e6e73",
+                              }}>
+                                {ej.activo ? "● Visible" : "○ Oculto"}
+                              </span>
+                              {/* Badge plazo vencido */}
+                              {vencido && (
+                                <span style={{ fontSize:10, padding:"2px 8px", borderRadius:4, fontWeight:700, background:"rgba(255,69,58,0.12)", border:"1px solid rgba(255,69,58,0.25)", color:"#ff453a" }}>
+                                  Plazo vencido
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize:13, color:"var(--texto-secundario)", marginBottom:4 }}>{ej.descripcion}</div>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:4, flexWrap:"wrap" }}>
+                              <span style={{
+                                fontSize:10, padding:"2px 8px", borderRadius:4, fontWeight:700,
+                                background: (ej.nivel||1) <= 2 ? "rgba(34,197,94,0.12)" : (ej.nivel||1) <= 4 ? "rgba(234,179,8,0.12)" : (ej.nivel||1) <= 6 ? "rgba(249,115,22,0.12)" : "rgba(239,68,68,0.12)",
+                                border: `1px solid ${(ej.nivel||1) <= 2 ? "rgba(34,197,94,0.30)" : (ej.nivel||1) <= 4 ? "rgba(234,179,8,0.30)" : (ej.nivel||1) <= 6 ? "rgba(249,115,22,0.30)" : "rgba(239,68,68,0.30)"}`,
+                                color: (ej.nivel||1) <= 2 ? "#86efac" : (ej.nivel||1) <= 4 ? "#fde047" : (ej.nivel||1) <= 6 ? "#fdba74" : "#ffb4ab",
+                              }}>
+                                Nv.{ej.nivel||1}
+                              </span>
+                              <span style={{ fontSize:11, color:"var(--texto-apagado)" }}>
+                                {ej.items.length} punto{ej.items.length !== 1 ? "s" : ""} · {ej.tiempo_minutos} min
+                              </span>
+                              {/* Badge deadline */}
+                              {fmtLimite && (
+                                <span style={{
+                                  fontFamily:"var(--mono)", fontSize:10, padding:"2px 9px", borderRadius:4, fontWeight:700,
+                                  background: vencido ? "rgba(255,69,58,0.10)" : hoy ? "rgba(255,159,10,0.10)" : "rgba(48,209,88,0.10)",
+                                  border: `1px solid ${vencido ? "rgba(255,69,58,0.22)" : hoy ? "rgba(255,159,10,0.22)" : "rgba(48,209,88,0.22)"}`,
+                                  color: vencido ? "#ff453a" : hoy ? "#ff9f0a" : "#30d158",
+                                }}>
+                                  {vencido ? "✕" : hoy ? "⚠" : "⏱"} {vencido ? `Venció: ${fmtLimite}` : hoy ? `Vence HOY · ${limite.toLocaleTimeString("es-CL",{hour:"2-digit",minute:"2-digit"})}` : `Vence: ${fmtLimite}`}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {/* Toggle visibilidad */}
+                          <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, flexShrink:0 }}>
+                            <label style={{ position:"relative", width:44, height:24, cursor:"pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={!!ej.activo}
+                                onChange={() => toggleVisibilidad(ej.id)}
+                                style={{ opacity:0, width:0, height:0 }}
+                              />
+                              <span style={{
+                                position:"absolute", inset:0, borderRadius:24,
+                                background: ej.activo ? "#30d158" : "#3a3a3c",
+                                transition:".22s",
+                              }}>
+                                <span style={{
+                                  position:"absolute", height:18, width:18,
+                                  left: ej.activo ? 23 : 3, bottom:3,
+                                  background:"#fff", borderRadius:"50%", transition:".22s",
+                                }}/>
+                              </span>
+                            </label>
+                            <span style={{ fontSize:10, fontWeight:700, color: ej.activo ? "#30d158" : "#6e6e73" }}>
+                              {ej.activo ? "Visible" : "Oculto"}
                             </span>
                           </div>
-                          <div style={{ fontSize:13, color:"var(--texto-secundario)", marginBottom:4 }}>{ej.descripcion}</div>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:4 }}>
-                            <span style={{
-                              fontSize:10, padding:"2px 8px", borderRadius:4, fontWeight:700,
-                              background: (ej.nivel||1) <= 2 ? "rgba(34,197,94,0.12)" : (ej.nivel||1) <= 4 ? "rgba(234,179,8,0.12)" : (ej.nivel||1) <= 6 ? "rgba(249,115,22,0.12)" : "rgba(239,68,68,0.12)",
-                              border: `1px solid ${(ej.nivel||1) <= 2 ? "rgba(34,197,94,0.30)" : (ej.nivel||1) <= 4 ? "rgba(234,179,8,0.30)" : (ej.nivel||1) <= 6 ? "rgba(249,115,22,0.30)" : "rgba(239,68,68,0.30)"}`,
-                              color: (ej.nivel||1) <= 2 ? "#86efac" : (ej.nivel||1) <= 4 ? "#fde047" : (ej.nivel||1) <= 6 ? "#fdba74" : "#ffb4ab",
-                            }}>
-                              Nv.{ej.nivel||1}
-                            </span>
-                            <span style={{ fontSize:11, color:"var(--texto-apagado)" }}>
-                              {ej.items.length} punto{ej.items.length !== 1 ? "s" : ""} · {ej.tiempo_minutos} min · Creado {ej.fecha_creacion ? new Date(ej.fecha_creacion).toLocaleDateString("es-CL") : "—"}
-                            </span>
+                          <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                            <button
+                              className="btn-evaluar"
+                              onClick={async () => {
+                                setEjSeleccionado(ej)
+                                setVistaEjercicios("entregas")
+                                setMensaje("")
+                                await cargarEntregasEj(ej.id)
+                              }}
+                            >
+                              Ver entregas
+                            </button>
+                            <button
+                              className="boton-secundario"
+                              style={{ padding:"6px 12px", fontSize:12 }}
+                              onClick={() => eliminarEjercicio(ej.id)}
+                              disabled={cargando}
+                            >
+                              Eliminar
+                            </button>
                           </div>
                         </div>
-                        <div style={{ display:"flex", gap:6 }}>
-                          <button
-                            className="btn-evaluar"
-                            onClick={async () => {
-                              setEjSeleccionado(ej)
-                              setVistaEjercicios("entregas")
-                              setMensaje("")
-                              await cargarEntregasEj(ej.id)
-                            }}
-                          >
-                            Ver entregas
-                          </button>
-                          <button
-                            className="boton-secundario"
-                            style={{ padding:"6px 12px", fontSize:12 }}
-                            onClick={() => eliminarEjercicio(ej.id)}
-                            disabled={cargando}
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </>
               )}
@@ -947,6 +1025,26 @@ export default function PanelDocente() {
                            ejNivel <= 6 ? "🟠 Avanzado — técnicas complejas, evasión" :
                            "🔴 Experto — end-to-end sin asistencia"}
                         </div>
+                      </div>
+                    </div>
+                    {/* Fecha y hora límite de entrega */}
+                    <div style={{
+                      border:"1px solid rgba(41,151,255,0.30)", borderRadius:10,
+                      padding:"14px 16px", background:"rgba(41,151,255,0.04)",
+                    }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:"#6db8ff", textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:10 }}>
+                        ⏱ Fecha y hora límite de entrega <span style={{ color:"#ff453a" }}>*</span>
+                      </div>
+                      <input
+                        className="campo-inicio"
+                        type="datetime-local"
+                        value={ejFechaLimite}
+                        onChange={e => setEjFechaLimite(e.target.value)}
+                        required
+                        style={{ colorScheme:"dark" }}
+                      />
+                      <div style={{ fontSize:11, color:"var(--texto-apagado)", marginTop:7, fontFamily:"var(--mono)", lineHeight:1.5 }}>
+                        Pasada esta fecha y hora los alumnos no podrán enviar su entrega
                       </div>
                     </div>
                     <div>
@@ -1025,6 +1123,39 @@ export default function PanelDocente() {
                         style={{ fontSize:12, padding:"6px 12px", marginTop:4 }}
                         onClick={() => setEjItems([...ejItems, ""])}
                       >+ Agregar punto</button>
+                    </div>
+                    {/* Toggle visibilidad inicial */}
+                    <div style={{
+                      display:"flex", alignItems:"center", justifyContent:"space-between",
+                      padding:"12px 14px", background:"rgba(255,255,255,0.03)",
+                      border:"1px solid rgba(255,255,255,0.08)", borderRadius:8,
+                    }}>
+                      <div>
+                        <div style={{ fontSize:13, fontWeight:700, color:"#fff", marginBottom:3 }}>Publicar como visible</div>
+                        <div style={{ fontSize:12, color:"var(--texto-apagado)" }}>
+                          {ejVisible
+                            ? "Los alumnos verán el ejercicio inmediatamente"
+                            : "Se crea como borrador — los alumnos no lo verán aún"}
+                        </div>
+                      </div>
+                      <label style={{ position:"relative", width:44, height:24, cursor:"pointer", marginLeft:14, flexShrink:0 }}>
+                        <input
+                          type="checkbox"
+                          checked={ejVisible}
+                          onChange={e => setEjVisible(e.target.checked)}
+                          style={{ opacity:0, width:0, height:0 }}
+                        />
+                        <span style={{
+                          position:"absolute", inset:0, borderRadius:24,
+                          background: ejVisible ? "#30d158" : "#3a3a3c", transition:".22s",
+                        }}>
+                          <span style={{
+                            position:"absolute", height:18, width:18,
+                            left: ejVisible ? 23 : 3, bottom:3,
+                            background:"#fff", borderRadius:"50%", transition:".22s",
+                          }}/>
+                        </span>
+                      </label>
                     </div>
                     {mensaje && (
                       <div style={{ padding:"10px 14px", background:"rgba(0,163,255,0.08)", border:"1px solid rgba(0,163,255,0.20)", borderRadius:8, fontSize:13, color:"var(--primario-dim)" }}>

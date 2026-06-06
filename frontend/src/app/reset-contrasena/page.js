@@ -22,7 +22,7 @@ function ResetForm() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (nueva.length < 6) { setMensaje("La contraseña debe tener al menos 6 caracteres"); return }
+    if (nueva.length < 8) { setMensaje("La contraseña debe tener al menos 8 caracteres"); return }
     if (nueva !== confirmar) { setMensaje("Las contraseñas no coinciden"); return }
     setCargando(true); setMensaje("")
     try {
@@ -114,7 +114,7 @@ function ResetForm() {
                   type="password"
                   value={value}
                   onChange={e => setter(e.target.value)}
-                  placeholder="Mínimo 6 caracteres"
+                  placeholder="Mínimo 8 caracteres"
                   required
                   style={{
                     width: "100%", padding: "12px 14px", fontSize: 14,

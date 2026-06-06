@@ -13,12 +13,15 @@ const NOMBRES_NIV = {
 }
 const vacioNiveles = () => Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, { completados: 0 }]))
 
+const API_URL_INICIO = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
+
 export default function InicioPlataforma() {
   const router = useRouter()
   const [nombreUsuario, setNombreUsuario] = useState("")
   const [rolUsuario, setRolUsuario] = useState("")
   const [progAtaque,  setProgAtaque]  = useState(vacioNiveles())
   const [progDefensa, setProgDefensa] = useState(vacioNiveles())
+  const [anuncios, setAnuncios] = useState([])
 
   const cargarProgreso = async (usuario, token) => {
     const API_URL = process.env.NEXT_PUBLIC_API_URL
@@ -43,6 +46,11 @@ export default function InicioPlataforma() {
     const r       = localStorage.getItem("rol_usuario") || ""
     setNombreUsuario(nombre); setRolUsuario(r)
     if (usuario) cargarProgreso(usuario, localStorage.getItem("token") || "")
+    const tok = localStorage.getItem("token") || ""
+    if (tok) {
+      fetch(`${API_URL_INICIO}/anuncios`, { headers: { "Authorization": `Bearer ${tok}` } })
+        .then(r => r.json()).then(d => setAnuncios(d.anuncios || [])).catch(() => {})
+    }
   }, [])
 
   const totalAtaque  = Object.values(progAtaque).reduce((s, v)  => s + (v.completados || 0), 0)
@@ -55,6 +63,42 @@ export default function InicioPlataforma() {
       <TransicionPagina>
         <main style={{ minHeight: "100vh", background: "#141414" }}>
           <BarraSuperior paginaActiva="inicio" />
+
+          {/* ── ANUNCIOS ── */}
+          {anuncios.length > 0 && (() => {
+            const colorTipo = { urgente: "#ff453a", aviso: "#2997ff", info: "#ff9f0a" }
+            const urgentes = anuncios.filter(a => a.tipo === "urgente")
+            const resto = anuncios.filter(a => a.tipo !== "urgente")
+            return (
+              <div style={{ padding: "20px 32px 0" }}>
+                {urgentes.map(a => (
+                  <div key={a.id} style={{ background: "rgba(255,69,58,.07)", border: "1px solid rgba(255,69,58,.25)", borderLeft: "4px solid #ff453a", borderRadius: 12, padding: "14px 18px", marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff453a", animation: "pulse-dot 1.5s infinite" }} />
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#ff453a", textTransform: "uppercase", letterSpacing: ".06em" }}>Urgente</span>
+                      <span style={{ fontSize: 11, color: "#6e7681" }}>· {a.autor}</span>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#f5f5f7" }}>{a.titulo}</div>
+                    <div style={{ fontSize: 13, color: "#aeaeb2", marginTop: 4, lineHeight: 1.5 }}>{a.mensaje}</div>
+                  </div>
+                ))}
+                {resto.length > 0 && (
+                  <div style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 12, overflow: "hidden", marginBottom: 10 }}>
+                    {resto.map((a, i) => (
+                      <div key={a.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 16px", borderBottom: i < resto.length - 1 ? "1px solid rgba(255,255,255,.06)" : "none" }}>
+                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: colorTipo[a.tipo] || "#2997ff", flexShrink: 0, marginTop: 5 }} />
+                        <div>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#f5f5f7" }}>{a.titulo}</span>
+                          <span style={{ fontSize: 11, color: "#6e7681", marginLeft: 8 }}>· {a.autor}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <style>{`@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}`}</style>
+              </div>
+            )
+          })()}
 
           {/* ── HERO ── */}
           <section className="home-hero">

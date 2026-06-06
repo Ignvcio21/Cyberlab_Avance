@@ -42,7 +42,7 @@ export default function InicioSesion() {
     if (!nombre.trim()) { setMensaje("Ingresa tu nombre"); return }
     if (!correo.trim() || !correo.includes("@")) { setMensaje("Ingresa un correo electrónico válido"); return }
     if (!contrasena.trim()) { setMensaje("Ingresa una contraseña"); return }
-    if (contrasena.length < 4) { setMensaje("La contraseña debe tener al menos 4 caracteres"); return }
+    if (contrasena.length < 8) { setMensaje("La contraseña debe tener al menos 8 caracteres"); return }
     if (contrasena !== confirmarContrasena) { setMensaje("Las contraseñas no coinciden"); return }
     setCargando(true)
     try {

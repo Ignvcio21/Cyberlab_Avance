@@ -327,3 +327,17 @@ class EntregaEjercicioDocente(Base):
 
     ejercicio = relationship("EjercicioDocente", back_populates="entregas")
     usuario = relationship("Usuario", foreign_keys=[usuario_id])
+
+
+class AnuncioDocente(Base):
+    __tablename__ = "anuncios_docente"
+
+    id = Column(Integer, primary_key=True, index=True)
+    titulo = Column(String, nullable=False)
+    mensaje = Column(Text, nullable=False)
+    tipo = Column(String, nullable=False, default="aviso")  # urgente | aviso | info
+    autor_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
+    activo = Column(Boolean, default=True, nullable=False)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
+
+    autor = relationship("Usuario")

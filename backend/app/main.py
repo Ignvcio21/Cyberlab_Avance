@@ -26,6 +26,7 @@ from .models import (
     PlantillaEscenario, VariablePlantilla, EscenarioInstancia, VariableInstancia,
     EscenarioActivoUsuario, BloqueoEscenario,
     EjercicioDocente, ItemEjercicioDocente, EntregaEjercicioDocente,
+    AnuncioDocente,
 )
 from .schemas import (
     SolicitudInicioSesion, SolicitudRegistroEstudiante, SolicitudFeedbackIA,
@@ -43,6 +44,8 @@ from .schemas import (
     SolicitudEntregarEjercicio, SolicitudEvaluarEntrega, EntregaSalida,
     SolicitudIaAsistir,
     SolicitudRecuperarContrasena, SolicitudResetContrasena,
+    SolicitudActualizarPerfil, SolicitudCambiarContrasenaPerfil,
+    SolicitudCrearAnuncio, SolicitudEditarAnuncio,
 )
 from .email_utils import (
     correo_recuperar_contrasena,
@@ -397,13 +400,15 @@ def iniciar_sistema():
             pass
 
     bd = SesionLocal()
+    ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@gmail.com")
+    ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
     admin = bd.query(Usuario).filter(Usuario.nombre_usuario == "admin").first()
     if not admin:
         bd.add(Usuario(
             nombre_usuario="admin",
             nombre="Administrador",
-            correo="admin@gmail.com",
-            contrasena=hashear_contrasena("admin123"),
+            correo=ADMIN_EMAIL,
+            contrasena=hashear_contrasena(ADMIN_PASSWORD),
             rol="admin"
         ))
         bd.commit()
@@ -411,7 +416,7 @@ def iniciar_sistema():
         if admin.rol != "admin":
             admin.rol = "admin"
         if not admin.correo:
-            admin.correo = "admin@gmail.com"
+            admin.correo = ADMIN_EMAIL
         if not admin.nombre:
             admin.nombre = "Administrador"
         bd.commit()
@@ -453,23 +458,6 @@ def health():
     import os
     return {"status": "ok", "secret_key_prefix": os.environ.get("SECRET_KEY","")[:8]}
 
-
-# ── Test email (GET público para diagnóstico) ──────────────────────
-@app.get("/auth/test-email")
-def test_email():
-    from .email_utils import _enviar_sync, SENDGRID_API_KEY
-    destino = "vidal.diaz.ignacio@gmail.com"
-    try:
-        _enviar_sync(
-            to=destino,
-            subject="[CyberLab] Test de correo",
-            html="<p>Si ves esto, el sistema de correos funciona correctamente. ✅</p>"
-        )
-        return {"ok": True, "mensaje": f"Correo enviado a {destino}",
-                "sendgrid_api_key_set": bool(SENDGRID_API_KEY)}
-    except Exception as e:
-        return {"ok": False, "error": str(e),
-                "sendgrid_api_key_set": bool(SENDGRID_API_KEY)}
 
 
 # ── Auth ──────────────────────────────────────────────────────────
@@ -517,8 +505,31 @@ def admin_crear_usuario(datos: SolicitudCrearUsuario, usuario_actual: Usuario = 
 
 
 @app.get("/admin/usuarios", response_model=list[RespuestaUsuario])
-def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd)):
-    return bd.query(Usuario).order_by(Usuario.id.asc()).all()
+def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd), q: str = ""):
+    query = bd.query(Usuario)
+    if q:
+        termino = f"%{q.strip().lower()}%"
+        query = query.filter(
+            (Usuario.correo.ilike(termino)) | (Usuario.nombre.ilike(termino)) | (Usuario.nombre_usuario.ilike(termino))
+        )
+    return query.order_by(Usuario.id.asc()).all()
+
+
+@app.get("/admin/logs")
+def admin_logs(usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd), limite: int = 200):
+    acciones = bd.query(AccionUsuario).order_by(AccionUsuario.fecha_creacion.desc()).limit(limite).all()
+    salida = []
+    for a in acciones:
+        u = bd.query(Usuario).filter(Usuario.id == a.usuario_id).first()
+        salida.append({
+            "id": a.id,
+            "usuario": u.nombre_usuario if u else "sistema",
+            "rol": u.rol if u else "—",
+            "comando": a.comando,
+            "resultado": (a.resultado or "")[:120],
+            "fecha": a.fecha_creacion.isoformat() if a.fecha_creacion else None,
+        })
+    return {"logs": salida}
 
 
 @app.post("/admin/cambiar-rol")
@@ -541,14 +552,18 @@ def admin_eliminar_usuario(
     bd: Session = Depends(obtener_bd)
 ):
     # Protecciones básicas
-    if datos.nombre_usuario == "admin":
-        raise HTTPException(status_code=400, detail="No se puede eliminar al administrador principal")
     if datos.nombre_usuario == usuario_actual.nombre_usuario:
         raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
 
     u = obtener_usuario_por_nombre(bd, datos.nombre_usuario)
     if not u:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # Protección: no permitir eliminar si es el único admin
+    if u.rol == "admin":
+        total_admins = bd.query(Usuario).filter(Usuario.rol == "admin").count()
+        if total_admins <= 1:
+            raise HTTPException(status_code=400, detail="No se puede eliminar el único administrador del sistema")
 
     uid = u.id
 
@@ -572,9 +587,10 @@ def admin_eliminar_usuario(
     # 6. Eliminar escenario activo
     bd.query(EscenarioActivoUsuario).filter(EscenarioActivoUsuario.usuario_id == uid).delete()
 
-    # 7. Eliminar variables de instancias y luego instancias
+    # 7. Eliminar variables, bloqueos de instancias y luego instancias
     for inst in bd.query(EscenarioInstancia).filter(EscenarioInstancia.usuario_id == uid).all():
         bd.query(VariableInstancia).filter(VariableInstancia.instancia_id == inst.id).delete()
+        bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id).delete()
     bd.query(EscenarioInstancia).filter(EscenarioInstancia.usuario_id == uid).delete()
 
     # 8. Eliminar entregas de ejercicios docente
@@ -1483,6 +1499,106 @@ def terminal_defensiva(request: Request, datos: SolicitudTerminalDefensa, usuari
         return {"salida": f"bash: {raw}: command not found\nEscribe 'ayuda' para ver los comandos del SOC."}
 
 
+# ── Perfil de usuario ─────────────────────────────────────────────
+
+@app.get("/perfil")
+def obtener_perfil(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    intentos = bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == usuario_actual.id).all()
+    evaluados = [it for it in intentos if it.evaluacion is not None]
+    nota_prom = round(sum(it.evaluacion.nota for it in evaluados) / len(evaluados), 1) if evaluados else None
+    entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == usuario_actual.id).all()
+    return {
+        "id": usuario_actual.id,
+        "nombre_usuario": usuario_actual.nombre_usuario,
+        "nombre": usuario_actual.nombre,
+        "correo": usuario_actual.correo,
+        "rol": usuario_actual.rol,
+        "fecha_creacion": usuario_actual.fecha_creacion.isoformat() if usuario_actual.fecha_creacion else None,
+        "stats": {
+            "intentos_total": len(intentos),
+            "intentos_evaluados": len(evaluados),
+            "nota_promedio": nota_prom,
+            "entregas_docente": len(entregas),
+        }
+    }
+
+
+@app.put("/perfil/actualizar")
+def actualizar_perfil(datos: SolicitudActualizarPerfil, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    nombre = (datos.nombre or "").strip()
+    nuevo_username = (datos.nombre_usuario or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre no puede estar vacío")
+    if not nuevo_username or len(nuevo_username) < 3:
+        raise HTTPException(status_code=400, detail="El nombre de usuario debe tener al menos 3 caracteres")
+    username_cambio = nuevo_username != usuario_actual.nombre_usuario
+    if username_cambio:
+        existente = bd.query(Usuario).filter(Usuario.nombre_usuario == nuevo_username, Usuario.id != usuario_actual.id).first()
+        if existente:
+            raise HTTPException(status_code=400, detail="Ese nombre de usuario ya está en uso")
+    usuario_actual.nombre = nombre
+    usuario_actual.nombre_usuario = nuevo_username
+    bd.commit()
+    return {"mensaje": "Perfil actualizado correctamente", "username_cambio": username_cambio}
+
+
+@app.put("/perfil/cambiar-contrasena")
+def cambiar_contrasena_perfil(datos: SolicitudCambiarContrasenaPerfil, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    from .auth import verificar_contrasena, hashear_contrasena
+    if not verificar_contrasena(datos.contrasena_actual, usuario_actual.contrasena):
+        raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
+    usuario_actual.contrasena = hashear_contrasena(datos.nueva_contrasena)
+    bd.commit()
+    return {"mensaje": "Contraseña actualizada correctamente"}
+
+
+# ── Anuncios docente ──────────────────────────────────────────────
+
+@app.get("/anuncios")
+def listar_anuncios(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    anuncios = bd.query(AnuncioDocente).filter(AnuncioDocente.activo == True).order_by(AnuncioDocente.fecha_creacion.desc()).all()
+    return {"anuncios": [
+        {
+            "id": a.id, "titulo": a.titulo, "mensaje": a.mensaje, "tipo": a.tipo,
+            "autor": a.autor.nombre or a.autor.nombre_usuario if a.autor else "—",
+            "fecha_creacion": a.fecha_creacion.isoformat() if a.fecha_creacion else None,
+        }
+        for a in anuncios
+    ]}
+
+
+@app.post("/anuncios")
+def crear_anuncio(datos: SolicitudCrearAnuncio, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    tipo = datos.tipo if datos.tipo in ("urgente", "aviso", "info") else "aviso"
+    anuncio = AnuncioDocente(titulo=datos.titulo.strip(), mensaje=datos.mensaje.strip(), tipo=tipo, autor_id=usuario_actual.id)
+    bd.add(anuncio)
+    bd.commit()
+    bd.refresh(anuncio)
+    return {"mensaje": "Anuncio publicado", "id": anuncio.id}
+
+
+@app.put("/anuncios/{anuncio_id}")
+def editar_anuncio(anuncio_id: int, datos: SolicitudEditarAnuncio, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    anuncio = bd.query(AnuncioDocente).filter(AnuncioDocente.id == anuncio_id).first()
+    if not anuncio:
+        raise HTTPException(status_code=404, detail="Anuncio no encontrado")
+    anuncio.titulo = datos.titulo.strip()
+    anuncio.mensaje = datos.mensaje.strip()
+    anuncio.tipo = datos.tipo if datos.tipo in ("urgente", "aviso", "info") else "aviso"
+    bd.commit()
+    return {"mensaje": "Anuncio actualizado"}
+
+
+@app.delete("/anuncios/{anuncio_id}")
+def eliminar_anuncio(anuncio_id: int, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    anuncio = bd.query(AnuncioDocente).filter(AnuncioDocente.id == anuncio_id).first()
+    if not anuncio:
+        raise HTTPException(status_code=404, detail="Anuncio no encontrado")
+    anuncio.activo = False
+    bd.commit()
+    return {"mensaje": "Anuncio eliminado"}
+
+
 # ── Recuperación de contraseña ────────────────────────────────────
 
 @app.post("/auth/recuperar-contrasena")
@@ -1509,8 +1625,8 @@ def recuperar_contrasena(request: Request, datos: SolicitudRecuperarContrasena, 
 @limiter.limit("10/minute")
 def reset_contrasena(request: Request, datos: SolicitudResetContrasena, bd: Session = Depends(obtener_bd)):
     from datetime import datetime, timezone
-    if not datos.nueva_contrasena or len(datos.nueva_contrasena) < 6:
-        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+    if not datos.nueva_contrasena or len(datos.nueva_contrasena) < 8:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 8 caracteres")
     usuario = bd.query(Usuario).filter(Usuario.token_reset == datos.token).first()
     if not usuario:
         raise HTTPException(status_code=400, detail="Token inválido o expirado")
@@ -1620,11 +1736,6 @@ def crear_ejercicio_docente(
     bd.commit()
     bd.refresh(ejercicio)
 
-    # Notificar a todos los estudiantes con correo registrado
-    estudiantes = bd.query(Usuario).filter(
-        Usuario.rol == "estudiante",
-        Usuario.correo.isnot(None),
-    ).all()
     return {"mensaje": "Ejercicio creado", "id": ejercicio.id}
 
 

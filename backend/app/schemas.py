@@ -1,4 +1,4 @@
-﻿from pydantic import BaseModel
+﻿from pydantic import BaseModel, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -13,6 +13,13 @@ class SolicitudRegistroEstudiante(BaseModel):
     correo: str
     contrasena: str
 
+    @field_validator("contrasena")
+    @classmethod
+    def validar_contrasena(cls, v):
+        if len(v) < 8:
+            raise ValueError("La contraseña debe tener al menos 8 caracteres")
+        return v
+
 
 class SolicitudFeedbackIA(BaseModel):
     nivel: int
@@ -26,6 +33,13 @@ class SolicitudCrearUsuario(BaseModel):
     correo: str
     contrasena: str
     rol: str
+
+    @field_validator("contrasena")
+    @classmethod
+    def validar_contrasena(cls, v):
+        if len(v) < 8:
+            raise ValueError("La contraseña debe tener al menos 8 caracteres")
+        return v
 
 
 class SolicitudCrearCurso(BaseModel):
@@ -266,6 +280,39 @@ class EntregaSalida(BaseModel):
         from_attributes = True
 
 
+# ── Perfil de usuario ────────────────────────────────────────────
+
+class SolicitudActualizarPerfil(BaseModel):
+    nombre: str
+    nombre_usuario: str
+
+
+class SolicitudCambiarContrasenaPerfil(BaseModel):
+    contrasena_actual: str
+    nueva_contrasena: str
+
+    @field_validator("nueva_contrasena")
+    @classmethod
+    def validar_contrasena(cls, v):
+        if len(v) < 8:
+            raise ValueError("La contraseña debe tener al menos 8 caracteres")
+        return v
+
+
+# ── Anuncios docente ──────────────────────────────────────────────
+
+class SolicitudCrearAnuncio(BaseModel):
+    titulo: str
+    mensaje: str
+    tipo: str = "aviso"  # urgente | aviso | info
+
+
+class SolicitudEditarAnuncio(BaseModel):
+    titulo: str
+    mensaje: str
+    tipo: str
+
+
 # ── Recuperación de contraseña ────────────────────────────────────
 
 class SolicitudRecuperarContrasena(BaseModel):
@@ -275,3 +322,10 @@ class SolicitudRecuperarContrasena(BaseModel):
 class SolicitudResetContrasena(BaseModel):
     token: str
     nueva_contrasena: str
+
+    @field_validator("nueva_contrasena")
+    @classmethod
+    def validar_contrasena(cls, v):
+        if len(v) < 8:
+            raise ValueError("La contraseña debe tener al menos 8 caracteres")
+        return v

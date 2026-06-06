@@ -357,7 +357,7 @@ export default function PanelDocente() {
     setCargando(true); setMensaje("")
     try {
       const r = await fetch(
-        `${API_URL}/admin/usuarios?nombre_usuario=${encodeURIComponent(nombreUsuario)}`,
+        `${API_URL}/admin/usuarios`,
         { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()

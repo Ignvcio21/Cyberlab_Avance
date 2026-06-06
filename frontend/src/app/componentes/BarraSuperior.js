@@ -89,13 +89,44 @@ export default function BarraSuperior({ paginaActiva }) {
             {rolUsuario === "admin" ? "⚙ Administrar" : "Panel"}
           </button>
         )}
+
+        {puedeVerPanel && (
+          <button
+            className={`pildora-nav ${paginaActiva === "estadisticas" ? "activa" : ""}`}
+            onClick={() => ir("/estadisticas")} type="button"
+          >
+            ◈ Estadísticas
+          </button>
+        )}
+
+        {puedeVerPanel && (
+          <button
+            className={`pildora-nav ${paginaActiva === "anuncios" ? "activa" : ""}`}
+            onClick={() => ir("/anuncios")} type="button"
+          >
+            Anuncios
+          </button>
+        )}
       </nav>
 
       <div className="barra-derecha">
-        <div className="usuario-pill">
-          ▸ <strong>{nombreUsuario || "—"}</strong>
-          {rolUsuario ? ` [${rolUsuario}]` : ""}
-        </div>
+        <button
+          type="button"
+          onClick={() => ir("/perfil")}
+          title="Ver mi perfil"
+          style={{
+            display: "flex", alignItems: "center", gap: 7,
+            padding: "6px 14px", borderRadius: 20,
+            background: paginaActiva === "perfil" ? "rgba(94,92,230,0.18)" : "rgba(255,255,255,0.06)",
+            border: paginaActiva === "perfil" ? "1px solid rgba(94,92,230,0.45)" : "1px solid rgba(255,255,255,0.10)",
+            color: paginaActiva === "perfil" ? "#5e5ce6" : "#aeaeb2",
+            cursor: "pointer", fontSize: 13, fontWeight: 600,
+            transition: "all .15s",
+          }}
+        >
+          <span style={{ fontSize: 14 }}>👤</span>
+          Perfil
+        </button>
         <button className="pildora-cta" type="button" onClick={salir}>
           Salir
         </button>

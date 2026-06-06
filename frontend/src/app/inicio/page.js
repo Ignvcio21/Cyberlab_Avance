@@ -22,6 +22,8 @@ export default function InicioPlataforma() {
   const [progAtaque,  setProgAtaque]  = useState(vacioNiveles())
   const [progDefensa, setProgDefensa] = useState(vacioNiveles())
   const [anuncios, setAnuncios] = useState([])
+  const [entregasPend, setEntregasPend] = useState([])
+  const [statsDocente, setStatsDocente] = useState(null)
 
   const cargarProgreso = async (usuario, token) => {
     const API_URL = process.env.NEXT_PUBLIC_API_URL
@@ -48,8 +50,33 @@ export default function InicioPlataforma() {
     if (usuario) cargarProgreso(usuario, localStorage.getItem("token") || "")
     const tok = localStorage.getItem("token") || ""
     if (tok) {
-      fetch(`${API_URL_INICIO}/anuncios`, { headers: { "Authorization": `Bearer ${tok}` } })
+      const hdr = { "Authorization": `Bearer ${tok}` }
+      fetch(`${API_URL_INICIO}/anuncios`, { headers: hdr })
         .then(r => r.json()).then(d => setAnuncios(d.anuncios || [])).catch(() => {})
+      // Si es docente/admin, cargar datos del panel
+      if (r === "admin" || r === "docente") {
+        Promise.all([
+          fetch(`${API_URL_INICIO}/admin/usuarios`, { headers: hdr }).then(res => res.json()),
+          fetch(`${API_URL_INICIO}/docente/intentos`, { headers: hdr }).then(res => res.json()),
+          fetch(`${API_URL_INICIO}/ejercicios-docente`, { headers: hdr }).then(res => res.json()),
+        ]).then(([us, it, ej]) => {
+          const usuarios = Array.isArray(us) ? us : []
+          const intentos = it?.intentos || []
+          const ejercicios = ej?.ejercicios || []
+          const pendientes = intentos.filter(i => !i.tiene_evaluacion)
+          setEntregasPend(pendientes.slice(0, 4))
+          const evaluados = intentos.filter(i => i.nota != null)
+          const notaProm = evaluados.length
+            ? (evaluados.reduce((s, i) => s + i.nota, 0) / evaluados.length).toFixed(1)
+            : "—"
+          setStatsDocente({
+            estudiantes: usuarios.filter(u => u.rol === "estudiante").length,
+            pendientes: pendientes.length,
+            notaPromedio: notaProm,
+            ejercicios: ejercicios.length,
+          })
+        }).catch(() => {})
+      }
     }
   }, [])
 
@@ -57,6 +84,158 @@ export default function InicioPlataforma() {
   const totalDefensa = Object.values(progDefensa).reduce((s, v) => s + (v.completados || 0), 0)
   const totalComp    = totalAtaque + totalDefensa
   const nivelActual  = Object.keys(progAtaque).find(n => (progAtaque[n]?.completados || 0) < TOTAL_EJ) || "7"
+
+  const esDocente = rolUsuario === "admin" || rolUsuario === "docente"
+
+  if (esDocente) {
+    return (
+      <GuardSesion>
+        <TransicionPagina>
+          <main style={{ minHeight: "100vh", background: "#141414", fontFamily: "Inter, sans-serif" }}>
+            <BarraSuperior paginaActiva="inicio" />
+
+            {/* ── HERO DOCENTE/ADMIN ── */}
+            <section style={{ maxWidth: 1100, margin: "0 auto", padding: "52px 32px 40px" }}>
+              <p style={{ fontSize: 11, fontWeight: 700, color: "#6e6e73", letterSpacing: ".08em", textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
+                {rolUsuario === "admin" ? "Panel de administración" : "Panel docente"}
+              </p>
+              <h1 style={{ fontSize: 34, fontWeight: 900, color: "#f5f5f7", letterSpacing: "-.7px", lineHeight: 1.15, marginBottom: 12 }}>
+                Hola, <span style={{ background: "linear-gradient(135deg,#2997ff,#5e5ce6)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>{nombreUsuario || "Administrador"}</span>.
+              </h1>
+              <p style={{ fontSize: 15, color: "#aeaeb2", lineHeight: 1.65, maxWidth: 540, marginBottom: 28 }}>
+                {statsDocente?.pendientes > 0
+                  ? <>Tienes <strong style={{ color: "#f5f5f7" }}>{statsDocente.pendientes} entrega{statsDocente.pendientes !== 1 ? "s" : ""} pendiente{statsDocente.pendientes !== 1 ? "s" : ""}</strong> de corrección. Revisa el panel para evaluar el trabajo de tus estudiantes.</>
+                  : rolUsuario === "admin"
+                    ? "Gestiona usuarios, contenido y configuración del sistema desde aquí."
+                    : "Todo al día. Puedes crear nuevos ejercicios o revisar las estadísticas del curso."}
+              </p>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <button onClick={() => router.push("/panel")} style={{ padding: "12px 24px", borderRadius: 12, fontSize: 14, fontWeight: 700, background: "linear-gradient(135deg,#2997ff,#5e5ce6)", color: "#fff", border: "none", cursor: "pointer" }}>
+                  {rolUsuario === "admin" ? "⚙ Ir a Administrar →" : "Ver entregas pendientes →"}
+                </button>
+                <button onClick={() => router.push("/estadisticas")} style={{ padding: "12px 24px", borderRadius: 12, fontSize: 14, fontWeight: 700, background: "rgba(255,255,255,.06)", color: "#aeaeb2", border: "1px solid rgba(255,255,255,.10)", cursor: "pointer" }}>
+                  ◈ Ver estadísticas
+                </button>
+              </div>
+            </section>
+
+            {/* ── STATS ── */}
+            <section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 32px 36px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 32 }}>
+                {[
+                  { lbl: "Estudiantes", val: statsDocente?.estudiantes ?? "—", color: "#30d158", sub: "registrados" },
+                  { lbl: "Por corregir", val: statsDocente?.pendientes ?? "—", color: "#ff9f0a", sub: "esperando evaluación" },
+                  { lbl: "Nota promedio", val: statsDocente?.notaPromedio ?? "—", color: "#2997ff", sub: "del curso" },
+                  { lbl: "Ejercicios", val: statsDocente?.ejercicios ?? "—", color: "#5e5ce6", sub: "publicados" },
+                ].map(({ lbl, val, color, sub }) => (
+                  <div key={lbl} style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderTop: `3px solid ${color}`, borderRadius: 14, padding: "20px 22px" }}>
+                    <div style={{ fontSize: 30, fontWeight: 900, color, marginBottom: 4 }}>{val}</div>
+                    <div style={{ fontSize: 13, color: "#aeaeb2" }}>{lbl}</div>
+                    <div style={{ fontSize: 11, color: "#6e6e73", marginTop: 4, fontFamily: "monospace" }}>{sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── ACCESOS RÁPIDOS ── */}
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#f5f5f7", marginBottom: 6 }}>Accesos rápidos</div>
+              <div style={{ fontSize: 13, color: "#aeaeb2", marginBottom: 18 }}>Navega directamente a las secciones más usadas</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 32 }}>
+                {(rolUsuario === "admin"
+                  ? [
+                      { icon: "[usuarios]", titulo: "Gestión de usuarios", desc: "Crea, edita y elimina cuentas. Cambia roles y busca por nombre o correo.", ruta: "/panel", flecha: "Ir a usuarios →" },
+                      { icon: "[contenido]", titulo: "Editor de contenido", desc: "Edita los módulos teóricos de cada nivel directamente desde el panel.", ruta: "/admin", flecha: "Editar contenido →" },
+                      { icon: "[auditoría]", titulo: "Logs de auditoría", desc: "Revisa todas las acciones de usuarios con filtros y exportación CSV.", ruta: "/estadisticas", flecha: "Ver logs →" },
+                    ]
+                  : [
+                      { icon: "[panel]", titulo: "Panel de estudiantes", desc: "Revisa intentos, evalúa entregas y asigna notas a tus estudiantes.", ruta: "/panel", flecha: "Ir al panel →" },
+                      { icon: "[ejercicios]", titulo: "Gestionar ejercicios", desc: "Crea, edita y administra los ejercicios del semestre con asistencia IA.", ruta: "/panel", flecha: "Ver ejercicios →" },
+                      { icon: "[estadísticas]", titulo: "Estadísticas del curso", desc: "Visualiza el rendimiento general, tasa de aprobación y exporta notas.", ruta: "/estadisticas", flecha: "Ver estadísticas →" },
+                    ]
+                ).map(({ icon, titulo, desc, ruta, flecha }) => (
+                  <div key={titulo} onClick={() => router.push(ruta)} style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderRadius: 16, padding: 24, display: "flex", flexDirection: "column", gap: 10, cursor: "pointer", transition: "border .18s, transform .15s" }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,.22)"; e.currentTarget.style.transform = "translateY(-2px)" }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,.10)"; e.currentTarget.style.transform = "translateY(0)" }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 700, fontFamily: "monospace", color: "#6e6e73" }}>{icon}</div>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "#f5f5f7" }}>{titulo}</div>
+                    <div style={{ fontSize: 12, color: "#aeaeb2", lineHeight: 1.55, flex: 1 }}>{desc}</div>
+                    <div style={{ fontSize: 12, color: "#6e6e73", marginTop: 4 }}>{flecha}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── FILA INFERIOR ── */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+
+                {/* Entregas pendientes */}
+                <div style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderRadius: 14, padding: 22 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#f5f5f7" }}>Entregas pendientes</div>
+                    {statsDocente?.pendientes > 0 && (
+                      <span style={{ padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 700, background: "rgba(255,159,10,.13)", color: "#ff9f0a", border: "1px solid rgba(255,159,10,.22)" }}>
+                        {statsDocente.pendientes} sin corregir
+                      </span>
+                    )}
+                  </div>
+                  {entregasPend.length === 0 ? (
+                    <div style={{ fontSize: 13, color: "#6e6e73", textAlign: "center", padding: "20px 0" }}>Sin entregas pendientes ✓</div>
+                  ) : (
+                    <>
+                      {entregasPend.map((e, i) => {
+                        const ini = (e.usuario || "?").slice(0, 2).toUpperCase()
+                        return (
+                          <div key={e.intento_id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 0", borderBottom: i < entregasPend.length - 1 ? "1px solid rgba(255,255,255,.06)" : "none" }}>
+                            <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,#2997ff,#5e5ce6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: "#fff", flexShrink: 0 }}>{ini}</div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: "#f5f5f7" }}>{e.usuario}</div>
+                              <div style={{ fontSize: 11, color: "#6e6e73", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{e.descripcion_ejercicio || `Ejercicio ${e.ejercicio_id}`}</div>
+                            </div>
+                            <button onClick={() => router.push("/panel")} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 700, background: "linear-gradient(135deg,#2997ff,#5e5ce6)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Evaluar</button>
+                          </div>
+                        )
+                      })}
+                      <div style={{ marginTop: 14, textAlign: "center" }}>
+                        <button onClick={() => router.push("/panel")} style={{ fontSize: 12, color: "#2997ff", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>Ver todas las entregas →</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Anuncios activos */}
+                <div style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderRadius: 14, padding: 22 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#f5f5f7" }}>Anuncios activos</div>
+                    <button onClick={() => router.push("/anuncios")} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 700, background: "linear-gradient(135deg,#2997ff,#5e5ce6)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>+ Nuevo</button>
+                  </div>
+                  {anuncios.length === 0 ? (
+                    <div style={{ fontSize: 13, color: "#6e6e73", textAlign: "center", padding: "20px 0" }}>Sin anuncios publicados</div>
+                  ) : (
+                    <>
+                      {anuncios.slice(0, 3).map((a, i) => {
+                        const colorDot = { urgente: "#ff453a", aviso: "#2997ff", info: "#ff9f0a" }
+                        return (
+                          <div key={a.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "11px 0", borderBottom: i < Math.min(anuncios.length, 3) - 1 ? "1px solid rgba(255,255,255,.06)" : "none" }}>
+                            <div style={{ width: 7, height: 7, borderRadius: "50%", background: colorDot[a.tipo] || "#2997ff", flexShrink: 0, marginTop: 5 }} />
+                            <div>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: "#f5f5f7" }}>{a.titulo}</div>
+                              <div style={{ fontSize: 11, color: "#6e6e73", marginTop: 2 }}>{a.tipo} · {a.autor}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      <div style={{ marginTop: 14, textAlign: "center" }}>
+                        <button onClick={() => router.push("/anuncios")} style={{ fontSize: 12, color: "#2997ff", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>Gestionar anuncios →</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </section>
+          </main>
+        </TransicionPagina>
+      </GuardSesion>
+    )
+  }
 
   return (
     <GuardSesion>

@@ -46,30 +46,35 @@ export default function BarraSuperior({ paginaActiva }) {
           Inicio
         </button>
 
-        <button
-          className={`pildora-nav ${paginaActiva === "laboratorio" ? "activa" : ""}`}
-          onClick={() => ir("/dashboard")} type="button"
-        >
-          ⚔ Ataque
-        </button>
+        {!puedeVerPanel && (
+          <button
+            className={`pildora-nav ${paginaActiva === "laboratorio" ? "activa" : ""}`}
+            onClick={() => ir("/dashboard")} type="button"
+          >
+            ⚔ Ataque
+          </button>
+        )}
 
-        {/* Defensa — nuevo tab */}
-        <button
-          className={`pildora-nav ${paginaActiva === "defensa" ? "activa" : ""}`}
-          onClick={() => ir("/dashboard/defensa")} type="button"
-          style={paginaActiva === "defensa" ? {
-            background: "linear-gradient(135deg, rgba(0,218,243,0.80), rgba(0,163,255,0.80))",
-          } : {}}
-        >
-          🛡 Defensa
-        </button>
+        {!puedeVerPanel && (
+          <button
+            className={`pildora-nav ${paginaActiva === "defensa" ? "activa" : ""}`}
+            onClick={() => ir("/dashboard/defensa")} type="button"
+            style={paginaActiva === "defensa" ? {
+              background: "linear-gradient(135deg, rgba(0,218,243,0.80), rgba(0,163,255,0.80))",
+            } : {}}
+          >
+            🛡 Defensa
+          </button>
+        )}
 
-        <button
-          className={`pildora-nav ${paginaActiva === "informacion" ? "activa" : ""}`}
-          onClick={() => ir("/dashboard/informacion?nivel=1")} type="button"
-        >
-          Información
-        </button>
+        {!puedeVerPanel && (
+          <button
+            className={`pildora-nav ${paginaActiva === "informacion" ? "activa" : ""}`}
+            onClick={() => ir("/dashboard/informacion?nivel=1")} type="button"
+          >
+            Información
+          </button>
+        )}
 
 
         {puedeVerNotas && (

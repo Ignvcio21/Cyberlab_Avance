@@ -18,7 +18,7 @@ const SECCIONES_INFO = [
 
 const NOMBRES_NIV = {
   1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración", 4: "Explotación",
-  5: "Post-exploit", 6: "Avanzado", 7: "Operación",
+  5: "Post-explotación", 6: "Avanzado", 7: "Operación completa",
 }
 
 const fmt = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
@@ -62,6 +62,7 @@ export default function Dashboard() {
   const [entregados,          setEntregados]          = useState(new Set())
   const [entregadosCargados,  setEntregadosCargados]  = useState(false)
   const finalizadaRef = useRef(false)
+  const fasesPrevRef  = useRef([])  // fases del ataque ya anunciadas
 
   // ── Derivados de la sesión ──
   const sesionItems   = sesion?.items || []
@@ -143,6 +144,24 @@ export default function Dashboard() {
   const aplicarSesion = useCallback((s) => {
     if (!s) return
     setSesion(s)
+
+    // Fases del ataque en tiempo real (eventos reales del servidor)
+    const fases = s.fases || []
+    const prev = fasesPrevRef.current
+    fases.forEach((f, i) => {
+      const antes = prev[i]?.estado
+      if (antes !== f.estado && f.estado !== "pendiente" && s.estado === "activa") {
+        const ts = new Date().toLocaleTimeString("es-CL", { hour:"2-digit", minute:"2-digit", second:"2-digit" })
+        setHistorial(h => [...h,
+          "────────────────────────────────────────────",
+          f.estado === "impactada"
+            ? `[${ts}] 🔴 [IDS] FASE ${f.orden}/${fases.length}: nueva actividad detectada en el laboratorio — revisa show events`
+            : `[${ts}] ✅ [FIREWALL] Fase ${f.orden}/${fases.length} contenida — tu bloqueo está funcionando`,
+        ])
+      }
+    })
+    fasesPrevRef.current = fases
+
     if (s.estado === "activa") {
       setTimerDocente(s.restante_seg ?? 0)
       return
@@ -175,6 +194,7 @@ export default function Dashboard() {
       const d = await r.json()
       if (!r.ok) { setMensaje(d?.detail || "No se pudo iniciar el ejercicio"); return }
       finalizadaRef.current = false
+      fasesPrevRef.current = []
       setEjDocenteActivo(ej)
       setPistaDocente(""); setMostrarPista(false)
       aplicarSesion(d.sesion)
@@ -183,6 +203,7 @@ export default function Dashboard() {
         `Ejercicio iniciado: ${ej.titulo}`,
         "Usa la terminal para explorar. Los puntos se completan automáticamente al ejecutar los comandos correctos.",
         "Investiga el laboratorio: los pasos con IP se validan contra la IP real del escenario.",
+        ...(d.sesion?.multi_vector ? ["⚠ Reconocimiento inicial: hay MÁS DE UN host objetivo — audita todos para completar."] : []),
       ])
     } catch { setMensaje("No se pudo conectar con el backend") }
   }
@@ -309,6 +330,20 @@ export default function Dashboard() {
     }, 1000)
     return () => clearInterval(iv)
   }, [sesionActiva, ejDocenteActivo, confirmarExpiracion])
+
+  // Sincronizar la sesión con el servidor: las fases del ataque avanzan
+  // aunque el estudiante no escriba en la terminal
+  useEffect(() => {
+    if (!sesionActiva) return
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch(`${API_URL}/ejercicios-docente/sesion/activa`, { headers: getAuthHeaders() })
+        const d = await r.json()
+        if (d?.sesion) aplicarSesion(d.sesion)
+      } catch {}
+    }, 7000)
+    return () => clearInterval(iv)
+  }, [sesionActiva, aplicarSesion])
 
   // ================================================================
   // RENDER

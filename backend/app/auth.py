@@ -17,6 +17,9 @@ from .models import Usuario
 
 # ── Configuración JWT ─────────────────────────────────────────────
 SECRET_KEY    = os.environ.get("SECRET_KEY", "cyberlab-dev-secret-cambiar-en-produccion")
+if SECRET_KEY == "cyberlab-dev-secret-cambiar-en-produccion":
+    print("[SEGURIDAD] ADVERTENCIA: SECRET_KEY no está definida en el entorno — "
+          "se está usando la clave de desarrollo. Configúrala en Railway antes de usar en producción.")
 ALGORITHM     = "HS256"
 EXPIRACION_MIN = int(os.environ.get("JWT_EXPIRACION_MIN", "480"))  # 8 horas
 

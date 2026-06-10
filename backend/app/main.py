@@ -34,6 +34,8 @@ from .sesiones import (
     crear_sesion, finalizar_sesion, obtener_sesion_activa,
     verificar_expiracion, sesion_a_dict, evaluar_comando_en_sesion,
     materializar_fases, materializar_fases_usuario,
+    item_verificable, CATEGORIAS_VERIFICABLES, comandos_sugeridos_para_item,
+    finalizar_sesiones_vencidas,
     aware_utc,
 )
 from .terminal_comandos import (
@@ -65,7 +67,7 @@ from .email_utils import (
 )
 from .auth import (
     hashear_contrasena, verificar_contrasena,
-    crear_token, obtener_usuario_actual,
+    crear_token, decodificar_token, obtener_usuario_actual,
     solo_admin, solo_docente, cualquier_rol,
     obtener_bd,
 )
@@ -75,7 +77,26 @@ cliente_openai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 Base.metadata.create_all(bind=engine)
 
 # ── Rate limiter ──────────────────────────────────────────────────
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+# Detrás del proxy de Railway todos los clientes comparten la IP del
+# proxy: se limita por usuario autenticado (sub del JWT) y, si no hay
+# token, por la IP real informada en X-Forwarded-For.
+def _clave_rate_limit(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        try:
+            payload = decodificar_token(auth[7:])
+            sub = payload.get("sub")
+            if sub:
+                return f"user:{sub}"
+        except Exception:
+            pass
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_clave_rate_limit, default_limits=["200/minute"])
 
 # ── Orígenes permitidos ───────────────────────────────────────────
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
@@ -189,7 +210,7 @@ def _enriquecer_ia(narrativa_base: str, variables: dict, tipo: str) -> str:
             f"TIPO: {tipo}\nNARRATIVA:\n{narrativa_base}\nVARIABLES:\n{vars_str}\n\nSolo la narrativa:"
         )
         resp = cliente_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300, temperature=0.7
         )
@@ -515,6 +536,11 @@ def iniciar_sesion(request: Request, datos: SolicitudInicioSesion, bd: Session =
     u = bd.query(Usuario).filter(Usuario.correo == datos.correo).first()
     if not u or not verificar_contrasena(datos.contrasena, u.contrasena):
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+    # Migración automática: cuentas antiguas con contraseña en texto plano
+    # se re-cifran con bcrypt en su primer login exitoso
+    if not (u.contrasena or "").startswith("$2"):
+        u.contrasena = hashear_contrasena(datos.contrasena)
+        bd.commit()
     token = crear_token({"sub": u.nombre_usuario, "rol": u.rol})
     return {"mensaje": "Inicio de sesión correcto", "nombre_usuario": u.nombre_usuario, "nombre": u.nombre, "rol": u.rol, "token": token}
 
@@ -784,12 +810,64 @@ def obtener_niveles_desbloqueados(
     }
 
 
+def _parse_tiempo_legible(respuesta: str) -> int | None:
+    """Extrae los segundos del texto 'Tiempo: X h Y min Z s' de la entrega."""
+    m = re.search(r"Tiempo:\s*([^.]+)", respuesta or "")
+    if not m:
+        return None
+    s = m.group(1)
+    seg = 0
+    h = re.search(r"(\d+)\s*h", s)
+    mn = re.search(r"(\d+)\s*min", s)
+    sc = re.search(r"(\d+)\s*s\b", s)
+    if h:  seg += int(h.group(1)) * 3600
+    if mn: seg += int(mn.group(1)) * 60
+    if sc: seg += int(sc.group(1))
+    return seg or None
+
+
 # ── Intentos (sistema histórico, solo lectura) ────────────────────
 # El endpoint de escritura /intentos/crear fue eliminado: aceptaba el
 # porcentaje y estado declarados por el cliente, lo que permitía forjar
 # resultados. Los resultados actuales se generan exclusivamente desde
 # las sesiones de ejercicio validadas por el servidor (sesiones.py).
 # Las lecturas se mantienen para conservar el historial en el panel.
+
+@app.get("/docente/entregas")
+def docente_listar_entregas(usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    """Todas las entregas de ejercicios docente, con la misma forma de
+    campos que /docente/intentos para que las vistas de estadísticas
+    funcionen sin cambios (el sistema de intentos quedó histórico)."""
+    # Estudiantes que abandonaron sin volver: sus sesiones vencidas se
+    # finalizan aquí para que la entrega parcial sea visible al docente
+    finalizar_sesiones_vencidas(bd)
+    entregas = bd.query(EntregaEjercicioDocente).order_by(EntregaEjercicioDocente.id.desc()).limit(500).all()
+    salida = []
+    for en in entregas:
+        u = bd.query(Usuario).filter(Usuario.id == en.usuario_id).first()
+        ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == en.ejercicio_id).first()
+        m_pct = re.search(r"Resultado:\s*(\d+)%", en.respuesta or "")
+        salida.append({
+            "intento_id": en.id,  # alias para compatibilidad con las vistas
+            "entrega_id": en.id,
+            "usuario": u.nombre_usuario if u else None,
+            "ejercicio_id": en.ejercicio_id,
+            "descripcion_ejercicio": ej.titulo if ej else f"Ejercicio #{en.ejercicio_id}",
+            "tipo": ej.tipo if ej else None,
+            "nivel": ej.nivel if ej else None,
+            "estado": en.estado,
+            "porcentaje": int(m_pct.group(1)) if m_pct else None,
+            "tiempo_seg": _parse_tiempo_legible(en.respuesta),
+            "errores": None,
+            "ayudas_pedidas": en.ayudas_pedidas or 0,
+            "nota": en.nota,
+            "comentarios": en.comentarios_docente,
+            "tiene_evaluacion": en.nota is not None,
+            "fecha_inicio": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+            "fecha_fin": en.fecha_evaluacion.isoformat() if en.fecha_evaluacion else None,
+        })
+    return {"entregas": salida}
+
 
 @app.get("/docente/intentos")
 def docente_listar_intentos(usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
@@ -1001,7 +1079,7 @@ def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Sess
         contexto_real = _construir_contexto_real(bd, usuario_actual.id)
 
         ai_resp = cliente_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -1065,7 +1143,7 @@ def _terminal_defensa(datos: SolicitudTerminalDefensa, usuario_actual: Usuario, 
     try:
         contexto_real = _construir_contexto_real(bd, usuario_actual.id)
         ai_resp = cliente_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -1236,13 +1314,17 @@ def reset_contrasena(request: Request, datos: SolicitudResetContrasena, bd: Sess
 # ── Feedback IA ───────────────────────────────────────────────────
 
 @app.post("/ia/feedback")
-def ia_feedback(body: SolicitudFeedbackIA, usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@limiter.limit("10/minute")
+def ia_feedback(request: Request, body: SolicitudFeedbackIA, usuario_actual: Usuario = Depends(obtener_usuario_actual)):
     prompt = (
         f"Eres un docente universitario de ciberseguridad. Explica el comando del estudiante de forma didáctica y breve.\n"
         f"Nivel: {body.nivel}\nComando: {body.comando}\nResultado: {body.resultado}\nEvidencia: {body.evidencia}"
     )
-    r = cliente_openai.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}], max_tokens=400)
-    return {"feedback": r.choices[0].message.content.strip()}
+    try:
+        r = cliente_openai.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], max_tokens=400)
+        return {"feedback": r.choices[0].message.content.strip()}
+    except Exception:
+        raise HTTPException(status_code=503, detail="El servicio de IA no está disponible en este momento")
 
 
 # ── Ejercicios creados por docente ────────────────────────────────
@@ -1255,6 +1337,20 @@ def crear_ejercicio_docente(
 ):
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Solo docentes y admin pueden crear ejercicios")
+
+    # Validar que cada punto sea verificable con los comandos del laboratorio:
+    # un punto sin familia de comandos asociada jamás podría completarse y
+    # dejaría el ejercicio imposible para el estudiante.
+    no_verificables = [it.descripcion for it in datos.items if not item_verificable(it.descripcion)]
+    if no_verificables:
+        listado = "; ".join(f"“{d}”" for d in no_verificables)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Estos puntos no son verificables con los comandos del laboratorio: {listado}. "
+                f"Reformúlalos usando acciones como: {', '.join(CATEGORIAS_VERIFICABLES)}."
+            ),
+        )
 
     # Título opcional: si no se entrega, se genera según tipo y nivel
     NOMBRES_NIVEL_ATAQUE = {1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración", 4: "Explotación", 5: "Post-explotación", 6: "Avanzado", 7: "Operación completa"}
@@ -1321,7 +1417,7 @@ def crear_ejercicio_docente(
             f"El escenario debe ser más complejo y ambiguo a mayor nivel. Redacta en español, estilo caso de estudio profesional."
         )
         resp = cliente_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt_esc}],
             max_tokens=600,
             temperature=0.7,
@@ -1423,6 +1519,22 @@ def ejercicios_por_tipo(
     return resultado
 
 
+@app.post("/ejercicios-docente/validar-items")
+def validar_items_ejercicio(
+    body: dict,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+):
+    """Chequeo en vivo para el formulario del docente: indica qué puntos
+    son verificables con los comandos del laboratorio."""
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    items = body.get("items") or []
+    return {
+        "items": [{"descripcion": d, "verificable": item_verificable(d)} for d in items],
+        "categorias": CATEGORIAS_VERIFICABLES,
+    }
+
+
 @app.post("/ejercicios-docente/ia-asistir")
 def ia_asistir_ejercicio(
     datos: SolicitudIaAsistir,
@@ -1477,12 +1589,14 @@ def ia_asistir_ejercicio(
         f"REGLAS ESTRICTAS:\n"
         f"- descripcion: 1-2 oraciones describiendo el ESCENARIO o PROBLEMA a resolver, sin mencionar herramientas ni comandos.\n"
         f"- instrucciones: 2-4 oraciones de CONTEXTO adicional del escenario (qué ocurrió, qué se espera del estudiante), sin revelar cómo hacerlo.\n"
-        f"- items: exactamente {datos.num_puntos} OBJETIVOS observables que el estudiante debe lograr (qué debe identificar, detectar, bloquear, analizar o documentar), redactados como resultados esperados, NO como pasos ni comandos.\n"
+        f"- items: exactamente {datos.num_puntos} OBJETIVOS observables que el estudiante debe lograr, redactados como resultados esperados, NO como pasos ni comandos.\n"
+        f"- IMPORTANTE: cada item DEBE corresponder a una de estas categorías de acción verificables por el laboratorio "
+        f"(usa sus palabras clave en la redacción): {', '.join(CATEGORIAS_VERIFICABLES)}.\n"
         f"Todo en español. El nivel de complejidad del escenario debe reflejar el nivel {datos.nivel} indicado."
     )
     try:
         resp = cliente_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=600,
             temperature=0.7,
@@ -1490,10 +1604,39 @@ def ia_asistir_ejercicio(
         import json as _json
         contenido = resp.choices[0].message.content.strip()
         data = _json.loads(contenido)
+
+        # Red de seguridad: si la IA generó algún item no verificable,
+        # se reemplaza por un objetivo válido del tipo correspondiente
+        FALLBACK_ITEMS = {
+            "ataque": [
+                "Escanear los puertos del objetivo con nmap",
+                "Enumerar los servicios expuestos del objetivo",
+                "Analizar la IP sospechosa identificada",
+                "Revisar los intentos fallidos de autenticación",
+                "Bloquear la IP atacante con el firewall",
+                "Documentar los hallazgos en el reporte técnico",
+            ],
+            "defensa": [
+                "Revisar las alertas del IDS",
+                "Consultar los eventos del sistema",
+                "Analizar el tráfico de la IP sospechosa",
+                "Correlacionar los eventos del incidente",
+                "Bloquear la IP atacante con el firewall",
+                "Generar el reporte del incidente",
+            ],
+        }
+        items_ia = [str(x) for x in (data.get("items") or [])]
+        fallbacks = [f for f in FALLBACK_ITEMS.get(datos.tipo, FALLBACK_ITEMS["defensa"]) if f not in items_ia]
+        items_final = []
+        for it in items_ia:
+            if item_verificable(it):
+                items_final.append(it)
+            elif fallbacks:
+                items_final.append(fallbacks.pop(0))
         return {
             "descripcion": data.get("descripcion", ""),
             "instrucciones": data.get("instrucciones", ""),
-            "items": data.get("items", []),
+            "items": items_final,
         }
     except Exception as ex:
         raise HTTPException(status_code=500, detail=f"Error al generar con IA: {str(ex)}")
@@ -1623,20 +1766,31 @@ def pedir_pista_sesion(
 
     sesion.ayudas += 1
     bd.commit()
+    herramientas = comandos_sugeridos_para_item(pendiente["descripcion"])
+    contexto_herr = (
+        f"El laboratorio valida este paso con herramientas de este tipo: {herramientas}. "
+        "Orienta SOLO hacia esas herramientas (sin entregar el comando completo con sus argumentos exactos). "
+        if herramientas else ""
+    )
     try:
         resp = cliente_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": (
                 "Eres un instructor de ciberseguridad. El estudiante está en un ejercicio práctico "
                 f"y debe completar este paso: \"{pendiente['descripcion']}\". "
-                "Dale una pista corta (máximo 2 líneas) sobre qué comando o herramienta usar, "
-                "sin revelar la solución exacta. Responde solo la pista, en español."
+                + contexto_herr +
+                "Dale una pista corta (máximo 2 líneas), sin revelar la solución exacta. "
+                "Responde solo la pista, en español."
             )}],
             max_tokens=120, temperature=0.5,
         )
         pista = resp.choices[0].message.content.strip()
     except Exception:
-        pista = "Analiza el contexto del ejercicio y piensa qué herramienta corresponde a este paso."
+        pista = (
+            f"Este paso se resuelve con herramientas como: {herramientas}."
+            if herramientas else
+            "Analiza el contexto del ejercicio y piensa qué herramienta corresponde a este paso."
+        )
     return {"pista": pista, "ayudas": sesion.ayudas}
 
 
@@ -1677,6 +1831,7 @@ def listar_entregas_ejercicio(
 ):
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
+    finalizar_sesiones_vencidas(bd)
     entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.ejercicio_id == ejercicio_id).all()
     resultado = []
     for en in entregas:
@@ -1737,16 +1892,25 @@ def mis_entregas(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
-    entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == usuario_actual.id).all()
+    entregas = bd.query(EntregaEjercicioDocente).filter(
+        EntregaEjercicioDocente.usuario_id == usuario_actual.id
+    ).order_by(EntregaEjercicioDocente.fecha_entrega.desc()).all()
     resultado = []
     for en in entregas:
+        ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == en.ejercicio_id).first()
         resultado.append({
             "id": en.id,
             "ejercicio_id": en.ejercicio_id,
+            "titulo": ej.titulo if ej else f"Ejercicio #{en.ejercicio_id}",
+            "tipo": ej.tipo if ej else "ataque",
+            "nivel": ej.nivel if ej else 1,
             "estado": en.estado,
             "nota": en.nota,
             "comentarios_docente": en.comentarios_docente,
+            "respuesta": en.respuesta,
+            "ayudas_pedidas": en.ayudas_pedidas or 0,
             "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+            "fecha_evaluacion": en.fecha_evaluacion.isoformat() if en.fecha_evaluacion else None,
         })
     return resultado
 

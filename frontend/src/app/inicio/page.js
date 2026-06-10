@@ -6,12 +6,11 @@ import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 import TransicionPagina from "../componentes/TransicionPagina"
 
-const TOTAL_EJ = 5
 const NOMBRES_NIV = {
   1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración",
-  4: "Explotación", 5: "Post-exploit", 6: "Avanzado", 7: "Operación"
+  4: "Explotación", 5: "Post-explotación", 6: "Avanzado", 7: "Operación completa"
 }
-const vacioNiveles = () => Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, { completados: 0 }]))
+const vacioNiveles = () => Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, { completados: 0, total: 0 }]))
 
 const API_URL_INICIO = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
@@ -56,7 +55,11 @@ export default function InicioPlataforma() {
     const headers = { "Authorization": `Bearer ${token}` }
     const parsear = (d) => {
       const det = d?.detalle || {}
-      return Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, { completados: Math.min(det[String(n)]?.completados || 0, TOTAL_EJ) }]))
+      // total = ejercicios realmente publicados por el docente en ese nivel
+      return Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, {
+        completados: det[String(n)]?.completados || 0,
+        total: det[String(n)]?.total || 0,
+      }]))
     }
     try {
       const [rA, rD] = await Promise.all([
@@ -95,12 +98,12 @@ export default function InicioPlataforma() {
       if (r === "admin" || r === "docente") {
         Promise.all([
           fetch(`${API_URL_INICIO}/admin/usuarios`, { headers: hdr }).then(res => res.json()),
-          fetch(`${API_URL_INICIO}/docente/intentos`, { headers: hdr }).then(res => res.json()),
+          fetch(`${API_URL_INICIO}/docente/entregas`, { headers: hdr }).then(res => res.json()),
           fetch(`${API_URL_INICIO}/ejercicios-docente`, { headers: hdr }).then(res => res.json()),
         ]).then(([us, it, ej]) => {
           const usuarios = Array.isArray(us) ? us : []
-          const intentos = it?.intentos || []
-          const ejercicios = ej?.ejercicios || []
+          const intentos = it?.entregas || []
+          const ejercicios = Array.isArray(ej) ? ej : (ej?.ejercicios || [])
           const pendientes = intentos.filter(i => !i.tiene_evaluacion)
           setEntregasPend(pendientes.slice(0, 4))
           const evaluados = intentos.filter(i => i.nota != null)
@@ -118,10 +121,15 @@ export default function InicioPlataforma() {
     }
   }, [])
 
-  const totalAtaque  = Object.values(progAtaque).reduce((s, v)  => s + (v.completados || 0), 0)
-  const totalDefensa = Object.values(progDefensa).reduce((s, v) => s + (v.completados || 0), 0)
-  const totalComp    = totalAtaque + totalDefensa
-  const nivelActual  = Object.keys(progAtaque).find(n => (progAtaque[n]?.completados || 0) < TOTAL_EJ) || "7"
+  const totalAtaque   = Object.values(progAtaque).reduce((s, v)  => s + (v.completados || 0), 0)
+  const totalDefensa  = Object.values(progDefensa).reduce((s, v) => s + (v.completados || 0), 0)
+  const dispAtaque    = Object.values(progAtaque).reduce((s, v)  => s + (v.total || 0), 0)
+  const dispDefensa   = Object.values(progDefensa).reduce((s, v) => s + (v.total || 0), 0)
+  const totalComp     = totalAtaque + totalDefensa
+  const totalDisp     = dispAtaque + dispDefensa
+  const nivelActual   = Object.keys(progAtaque).find(n =>
+    (progAtaque[n]?.total || 0) > (progAtaque[n]?.completados || 0)
+  ) || Object.keys(progAtaque).find(n => (progAtaque[n]?.total || 0) > 0) || "1"
 
   const esDocente = rolUsuario === "admin" || rolUsuario === "docente"
 
@@ -379,7 +387,7 @@ export default function InicioPlataforma() {
             </h1>
             <p>
               {totalComp > 0
-                ? <>Llevas <strong style={{ color: "#f5f5f7" }}>{totalComp} ejercicios completados</strong> de 35. Sigue avanzando en el Nivel {nivelActual}.</>
+                ? <>Llevas <strong style={{ color: "#f5f5f7" }}>{totalComp} ejercicio{totalComp !== 1 ? "s" : ""} completado{totalComp !== 1 ? "s" : ""}</strong>{totalDisp > 0 && <> de {totalDisp}</>}. Sigue avanzando en el Nivel {nivelActual}.</>
                 : "Bienvenido al laboratorio. Comienza tu primer ejercicio para desbloquear los módulos."}
             </p>
             <div className="home-hero-actions">
@@ -404,12 +412,13 @@ export default function InicioPlataforma() {
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:12 }}>
                   <span style={{ fontSize:18 }}>⚔️</span>
                   <span style={{ fontWeight:700, fontSize:15, color:"#f5f5f7" }}>Ataque</span>
-                  <span style={{ fontSize:12, color:"#8e8e93", fontFamily:"var(--mono)" }}>{totalAtaque}/35</span>
+                  <span style={{ fontSize:12, color:"#8e8e93", fontFamily:"var(--mono)" }}>{totalAtaque}/{dispAtaque || "—"}</span>
                 </div>
                 <div className="progress-card-mock">
                   {[1,2,3,4,5,6,7].map(n => {
-                    const comp = progAtaque[n]?.completados || 0
-                    const pct  = Math.round((comp / TOTAL_EJ) * 100)
+                    const comp  = progAtaque[n]?.completados || 0
+                    const tot   = progAtaque[n]?.total || 0
+                    const pct   = tot ? Math.round((comp / tot) * 100) : 0
                     return (
                       <div className="prog-row" key={n}>
                         <span className="prog-row-label">Nivel {n}</span>
@@ -428,12 +437,13 @@ export default function InicioPlataforma() {
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:12 }}>
                   <span style={{ fontSize:18 }}>🛡️</span>
                   <span style={{ fontWeight:700, fontSize:15, color:"#f5f5f7" }}>Defensa</span>
-                  <span style={{ fontSize:12, color:"#8e8e93", fontFamily:"var(--mono)" }}>{totalDefensa}/35</span>
+                  <span style={{ fontSize:12, color:"#8e8e93", fontFamily:"var(--mono)" }}>{totalDefensa}/{dispDefensa || "—"}</span>
                 </div>
                 <div className="progress-card-mock">
                   {[1,2,3,4,5,6,7].map(n => {
-                    const comp = progDefensa[n]?.completados || 0
-                    const pct  = Math.round((comp / TOTAL_EJ) * 100)
+                    const comp  = progDefensa[n]?.completados || 0
+                    const tot   = progDefensa[n]?.total || 0
+                    const pct   = tot ? Math.round((comp / tot) * 100) : 0
                     return (
                       <div className="prog-row" key={n}>
                         <span className="prog-row-label">Nivel {n}</span>

@@ -213,6 +213,44 @@ def atk_show_hosts(bd, usuario, m, ctx):
     )
 
 
+# ── Reconocimiento del host objetivo (modo ataque) ───────────────
+# Leen los datos del objetivo sembrados por el escenario, para que la
+# auditoría opere sobre datos reales y no respuestas inventadas por IA.
+
+@comando(r"^(scan ports|nmap)(\s+\S+)?$", REGISTRO_ATAQUE)
+def atk_scan_ports(bd, usuario, m, ctx):
+    svcs = q_eventos(bd, usuario.id).filter(Evento.tipo_evento == "Servicio Expuesto").all()
+    if not svcs:
+        host = q_eventos(bd, usuario.id).filter(Evento.tipo_evento == "Host Objetivo").first()
+        return f"Escaneo en curso...\n{host.descripcion}" if host else "No hay un objetivo activo. Inicia un ejercicio de ataque."
+    ip = svcs[0].ip_origen
+    lineas = [f"Escaneo de puertos sobre {ip}:", "PORT     STATE  SERVICE   VERSION"]
+    for e in svcs:
+        lineas.append("  " + e.descripcion)
+    return "\n".join(lineas)
+
+
+@comando(r"^(show services|enumerate services)$", REGISTRO_ATAQUE)
+def atk_show_services(bd, usuario, m, ctx):
+    svcs = q_eventos(bd, usuario.id).filter(Evento.tipo_evento == "Servicio Expuesto").all()
+    if not svcs: return "No se detectaron servicios. Escanea el objetivo primero."
+    return "SERVICIOS EXPUESTOS:\n" + "\n".join(f"  {e.descripcion}" for e in svcs)
+
+
+@comando(r"^show banners$", REGISTRO_ATAQUE)
+def atk_show_banners(bd, usuario, m, ctx):
+    svcs = q_eventos(bd, usuario.id).filter(Evento.tipo_evento == "Servicio Expuesto").all()
+    if not svcs: return "Sin banners capturados. Escanea el objetivo primero."
+    return "BANNERS DE SERVICIOS:\n" + "\n".join(f"  {e.descripcion.split('— ',1)[-1]}" for e in svcs)
+
+
+@comando(r"^show vulnerabilities$", REGISTRO_ATAQUE)
+def atk_show_vulns(bd, usuario, m, ctx):
+    vulns = q_eventos(bd, usuario.id).filter(Evento.tipo_evento == "Vulnerabilidad").all()
+    if not vulns: return "No se identificaron vulnerabilidades aún."
+    return "VULNERABILIDADES DETECTADAS:\n" + "\n".join(f"  [!] {e.descripcion}" for e in vulns)
+
+
 @comando(r"^resolve host$", REGISTRO_ATAQUE)
 def atk_resolve_host(bd, usuario, m, ctx):
     ev = q_eventos(bd, usuario.id).order_by(Evento.fecha_creacion.desc()).first()

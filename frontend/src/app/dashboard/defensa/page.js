@@ -17,8 +17,8 @@ const getAuthHeaders = () => ({
 })
 
 const NOMBRES_NIVELES_DEF = {
-  1: "Monitoreo Básico", 2: "Detección FB", 3: "Escaneo — Defensa",
-  4: "Investigación", 5: "Respuesta Activa", 6: "Multi-vector", 7: "Defensa Integral",
+  1: "Monitoreo Básico", 2: "Detección de Fuerza Bruta", 3: "Escaneo — Defensa",
+  4: "Investigación de Incidentes", 5: "Respuesta Activa", 6: "Multi-vector", 7: "Defensa Integral",
 }
 
 const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
@@ -166,6 +166,7 @@ export default function DefensaDashboard() {
         `[SISTEMA] Ejercicio iniciado: ${ej.titulo}`,
         "[SISTEMA] Monitoreo en curso. El atacante está activo — responde a los eventos.",
         "[SISTEMA] Identifica la IP real del atacante en los logs: los bloqueos se validan contra el escenario.",
+        ...(d.sesion?.multi_vector ? ["[SISTEMA] ⚠ Inteligencia inicial: hay MÁS DE UN actor involucrado — contener a uno solo no basta."] : []),
         "────────────────────────────────────────────",
       ])
     } catch { setMensaje("No se pudo conectar con el backend") }

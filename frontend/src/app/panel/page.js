@@ -335,8 +335,31 @@ export default function PanelDocente() {
   const [notaEntrega,         setNotaEntrega]         = useState("")
   const [comentariosEntrega,  setComentariosEntrega]  = useState("")
   const creandoRef = useRef(false)  // evita doble creación de ejercicio
+  // Chequeo en vivo: qué puntos del checklist son verificables por el laboratorio
+  const [itemsVerif, setItemsVerif] = useState({})
 
   const esAdmin = rolUsuario === "admin"
+
+  useEffect(() => {
+    if (vistaEjercicios !== "crear") return
+    const textos = ejItems.map(s => s.trim())
+    if (!textos.some(Boolean)) { setItemsVerif({}); return }
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API_URL}/ejercicios-docente/validar-items`, {
+          method: "POST", headers: getAuthHeaders(),
+          body: JSON.stringify({ items: textos }),
+        })
+        const d = await r.json()
+        if (r.ok && Array.isArray(d?.items)) {
+          const m = {}
+          d.items.forEach((it, i) => { m[i] = it.verificable })
+          setItemsVerif(m)
+        }
+      } catch {}
+    }, 600)
+    return () => clearTimeout(t)
+  }, [ejItems, vistaEjercicios])
 
   useEffect(() => {
     const u = sessionStorage.getItem("nombre_usuario") || ""
@@ -1107,27 +1130,46 @@ export default function PanelDocente() {
                       <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:8, textTransform:"uppercase", letterSpacing:1 }}>
                         Puntos a evaluar (checklist)
                       </label>
-                      {ejItems.map((item, i) => (
-                        <div key={i} style={{ display:"flex", gap:6, marginBottom:6 }}>
-                          <input
-                            className="campo-inicio"
-                            placeholder={`Punto ${i+1}`}
-                            value={item}
-                            onChange={e => {
-                              const copia = [...ejItems]
-                              copia[i] = e.target.value
-                              setEjItems(copia)
-                            }}
-                            style={{ flex:1 }}
-                          />
-                          {ejItems.length > 1 && (
-                            <button type="button" className="boton-secundario"
-                              style={{ padding:"6px 10px", fontSize:12 }}
-                              onClick={() => setEjItems(ejItems.filter((_, j) => j !== i))}
-                            >✕</button>
-                          )}
-                        </div>
-                      ))}
+                      {ejItems.map((item, i) => {
+                        const tieneTexto  = item.trim().length > 0
+                        const verificable = itemsVerif[i]
+                        return (
+                          <div key={i} style={{ marginBottom:6 }}>
+                            <div style={{ display:"flex", gap:6 }}>
+                              <input
+                                className="campo-inicio"
+                                placeholder={`Punto ${i+1}`}
+                                value={item}
+                                onChange={e => {
+                                  const copia = [...ejItems]
+                                  copia[i] = e.target.value
+                                  setEjItems(copia)
+                                }}
+                                style={{
+                                  flex:1,
+                                  borderColor: tieneTexto && verificable === false ? "rgba(255,159,10,0.50)" : undefined,
+                                }}
+                              />
+                              {tieneTexto && verificable === true && (
+                                <span style={{ alignSelf:"center", color:"#30d158", fontSize:14, flexShrink:0 }} title="Verificable por el laboratorio">✓</span>
+                              )}
+                              {ejItems.length > 1 && (
+                                <button type="button" className="boton-secundario"
+                                  style={{ padding:"6px 10px", fontSize:12 }}
+                                  onClick={() => setEjItems(ejItems.filter((_, j) => j !== i))}
+                                >✕</button>
+                              )}
+                            </div>
+                            {tieneTexto && verificable === false && (
+                              <div style={{ fontSize:11, color:"#ffb340", marginTop:3, lineHeight:1.5 }}>
+                                ⚠ Este punto no es verificable con los comandos del laboratorio — el estudiante no podría completarlo.
+                                Usa acciones como: revisar alertas, consultar eventos/logs, analizar tráfico, escanear puertos,
+                                bloquear una IP, verificar estado, correlacionar o generar reporte.
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                       <button
                         type="button"
                         className="boton-secundario"

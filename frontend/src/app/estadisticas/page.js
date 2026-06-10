@@ -55,12 +55,12 @@ function TabDashboard() {
     setCargando(true)
     Promise.all([
       fetch(`${API_URL}/admin/usuarios`, { headers: h }).then(r => r.json()),
-      fetch(`${API_URL}/docente/intentos`, { headers: h }).then(r => r.json()),
+      fetch(`${API_URL}/docente/entregas`, { headers: h }).then(r => r.json()),
       fetch(`${API_URL}/ejercicios-docente`, { headers: h }).then(r => r.json()),
     ]).then(([us, it, ej]) => {
       setUsuarios(Array.isArray(us) ? us : [])
-      setIntentos(it?.intentos || [])
-      setEjercicios(ej?.ejercicios || [])
+      setIntentos(it?.entregas || [])
+      setEjercicios(Array.isArray(ej) ? ej : (ej?.ejercicios || []))
     }).catch(() => setError("No se pudo cargar los datos"))
       .finally(() => setCargando(false))
   }, [])
@@ -350,10 +350,10 @@ function TabExportar() {
     const h = getAuthHeaders()
     setCargando(true)
     Promise.all([
-      fetch(`${API_URL}/docente/intentos`, { headers: h }).then(r => r.json()),
+      fetch(`${API_URL}/docente/entregas`, { headers: h }).then(r => r.json()),
       fetch(`${API_URL}/admin/usuarios`, { headers: h }).then(r => r.json()),
     ]).then(([it, us]) => {
-      setIntentos(it?.intentos || [])
+      setIntentos(it?.entregas || [])
       setUsuarios(Array.isArray(us) ? us.filter(u => u.rol === "estudiante") : [])
     }).catch(() => setError("No se pudieron cargar los datos"))
       .finally(() => setCargando(false))

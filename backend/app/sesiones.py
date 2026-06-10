@@ -101,15 +101,30 @@ _aware = aware_utc
 #  - "comando": la IP atacante debe aparecer en el comando ejecutado
 KW_ITEM_BLOQUEO = ["bloquear", "bloqueo", "contener", "contención", "contencion", "mitigar"]
 KW_ITEM_IP      = [
+    # Defensa: la IP es el atacante a analizar/investigar
     "ip atacante", "ip sospechosa", "ip maliciosa", "ip del atacante",
     "historial de ip", "historial de la ip", "tráfico de la ip", "trafico de la ip",
     "analizar la ip", "analiza la ip", "analizar ip", "investigar la ip",
     "dirección ip del atacante", "direccion ip del atacante", "origen del ataque",
+    # Ataque: solo items de escaneo DIRIGIDO a un host (no cualquier mención
+    # de "objetivo" — enumerar servicios o vulns no requieren IP en el comando)
+    "host objetivo", "escanear el host", "escanear el objetivo", "ip objetivo",
 ]
 
 
 def _ip_aleatoria() -> str:
     return f"192.168.{random.randint(1, 10)}.{random.randint(10, 250)}"
+
+
+def _ip_aleatoria_libre(bd: Session) -> str:
+    """Sortea una IP que NO esté ya bloqueada en el firewall del
+    laboratorio: si una sesión nueva reutilizara una IP bloqueada por un
+    ejercicio anterior, el paso de bloqueo se marcaría solo."""
+    for _ in range(30):
+        ip = _ip_aleatoria()
+        if not bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip).first():
+            return ip
+    return _ip_aleatoria()  # espacio casi agotado: caso teórico
 
 
 def _sembrar_fuerza_bruta(bd: Session, ip: str, usuario_id: int, intentos: int = 8):
@@ -131,24 +146,53 @@ def _sembrar_escaneo(bd: Session, ip: str, usuario_id: int):
                   descripcion=f"Escaneo de puertos ({puertos}) detectado desde {ip}"))
 
 
+def _sembrar_objetivo(bd: Session, ip: str, usuario_id: int):
+    """Modo ATAQUE: siembra un host OBJETIVO a auditar — servicios
+    expuestos, banners de versión y vulnerabilidades — coherente con el
+    rol de pentester (no un atacante entrante)."""
+    perfil = random.choice([
+        {"svcs": [("22", "SSH", "OpenSSH 7.4"), ("80", "HTTP", "Apache 2.4.29"), ("3306", "MySQL", "MySQL 5.5.62")],
+         "vuln": "MySQL 5.5 expuesto — posibles credenciales por defecto (root sin contraseña)"},
+        {"svcs": [("21", "FTP", "vsftpd 2.3.4"), ("22", "SSH", "OpenSSH 8.0"), ("80", "HTTP", "nginx 1.14.0")],
+         "vuln": "vsftpd 2.3.4 — versión con backdoor conocido (CVE-2011-2523)"},
+        {"svcs": [("80", "HTTP", "Apache 2.4.49"), ("443", "HTTPS", "Apache 2.4.49"), ("8080", "HTTP-alt", "Tomcat 9.0.30")],
+         "vuln": "Apache 2.4.49 — path traversal y RCE (CVE-2021-41773)"},
+        {"svcs": [("22", "SSH", "OpenSSH 7.2"), ("445", "SMB", "Samba 3.6.25"), ("3389", "RDP", "xrdp 0.9.1")],
+         "vuln": "Samba 3.6.25 — ejecución remota de código (CVE-2017-7494)"},
+    ])
+    puertos = ", ".join(s[0] for s in perfil["svcs"])
+    bd.add(Evento(tipo_evento="Host Objetivo", ip_origen=ip, usuario_id=usuario_id,
+                  descripcion=f"Host {ip} activo — puertos abiertos: {puertos}"))
+    for puerto, svc, version in perfil["svcs"]:
+        bd.add(Evento(tipo_evento="Servicio Expuesto", ip_origen=ip, usuario_id=usuario_id,
+                      descripcion=f"{puerto}/tcp open {svc} — {version}"))
+    bd.add(Evento(tipo_evento="Vulnerabilidad", ip_origen=ip, usuario_id=usuario_id,
+                  descripcion=perfil["vuln"]))
+
+
 def _sembrar_eventos_escenario(bd: Session, ejercicio: EjercicioDocente, ips: list, usuario_id: int):
-    """Crea actividad real del atacante en el laboratorio del usuario.
-    Niveles 1-5: un atacante con un vector. Niveles 6-7: multi-vector —
-    dos IPs maliciosas con vectores distintos más tráfico legítimo de
-    ruido que el estudiante debe descartar."""
-    if len(ips) == 1:
-        if ejercicio.tipo == "defensa":
+    """Siembra el laboratorio del usuario según el ROL del ejercicio.
+
+    DEFENSA: actividad de un atacante entrante (fuerza bruta / escaneo) que
+    el analista debe detectar y contener. Niveles 6-7: dos atacantes + ruido.
+
+    ATAQUE: uno o más hosts OBJETIVO a auditar (servicios, banners, vulns)
+    que el pentester debe descubrir y reportar."""
+    if ejercicio.tipo == "defensa":
+        if len(ips) == 1:
             _sembrar_fuerza_bruta(bd, ips[0], usuario_id)
         else:
-            _sembrar_escaneo(bd, ips[0], usuario_id)
+            _sembrar_fuerza_bruta(bd, ips[0], usuario_id)
+            _sembrar_escaneo(bd, ips[1], usuario_id)
+            # Ruido legítimo: una IP inocente que NO debe bloquearse
+            ip_ruido = _ip_aleatoria()
+            for ruta in ["/index.html", "/login"]:
+                bd.add(Evento(tipo_evento="Tráfico Web", ip_origen=ip_ruido, usuario_id=usuario_id,
+                              descripcion=f"GET {ruta} HTTP/1.1 200 — navegación normal desde {ip_ruido}"))
     else:
-        _sembrar_fuerza_bruta(bd, ips[0], usuario_id)
-        _sembrar_escaneo(bd, ips[1], usuario_id)
-        # Ruido legítimo: una IP inocente que NO debe bloquearse
-        ip_ruido = _ip_aleatoria()
-        for ruta in ["/index.html", "/login"]:
-            bd.add(Evento(tipo_evento="Tráfico Web", ip_origen=ip_ruido, usuario_id=usuario_id,
-                          descripcion=f"GET {ruta} HTTP/1.1 200 — navegación normal desde {ip_ruido}"))
+        # Ataque: cada IP es un host objetivo a comprometer
+        for ip in ips:
+            _sembrar_objetivo(bd, ip, usuario_id)
     bd.commit()
 
 
@@ -176,6 +220,66 @@ def _atacantes_bloqueados(bd: Session, sesion: SesionEjercicio) -> bool:
 
 def _ip_atacante_bloqueada(bd: Session, ip: str) -> bool:
     return bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip).first() is not None
+
+
+# ── Verificabilidad de items (validación al crear ejercicios) ─────
+# Un item es verificable si su descripción calza con alguna regla, es
+# decir, existe al menos una familia de comandos capaz de completarlo.
+
+CATEGORIAS_VERIFICABLES = [
+    "revisar alertas del IDS", "consultar eventos o logs del sistema",
+    "analizar el tráfico de red", "escanear puertos / usar nmap",
+    "enumerar servicios o usuarios", "revisar sesiones o procesos activos",
+    "revisar intentos fallidos de login (fuerza bruta)",
+    "bloquear o contener una IP con el firewall",
+    "verificar el estado del sistema o del firewall",
+    "correlacionar eventos del incidente", "realizar análisis forense",
+    "documentar o generar el reporte del incidente",
+]
+
+
+# Ejemplos de comandos por familia — para que las pistas de la IA
+# orienten hacia herramientas que el laboratorio realmente reconoce
+FAMILIA_EJEMPLOS = {
+    "nmap":          "nmap <IP>", "scan_ports": "scan ports", "ping_arp": "ping / arp",
+    "show_hosts":    "show hosts", "show_services": "show services / enumerate services",
+    "show_vulns":    "show vulnerabilities", "show_banners": "show banners",
+    "bloqueo":       "iptables -A INPUT -s <IP> -j DROP / block ip <IP>",
+    "reporte":       "export-report / export report",
+    "alertas":       "tail -50 /var/log/syslog / show alerts",
+    "eventos":       "journalctl -n 50 / show events",
+    "trafico":       "tcpdump host <IP> -c 20 / show traffic",
+    "usuarios":      "show users / whoami", "sesiones": "netstat -an / show sessions",
+    "procesos":      "top -bn1 / show processes", "interfaz": "ip a / ifconfig",
+    "fallidos":      "grep Failed /var/log/auth.log / lastb -n 20",
+    "estado":        "systemctl status / iptables -L -n",
+    "correlacion":   "lastb -n 20 / journalctl", "forense": "tcpdump / strings",
+    "threat":        "show alerts / show traffic",
+}
+
+
+def comandos_sugeridos_para_item(descripcion: str) -> str:
+    """Herramientas con las que el laboratorio valida el item descrito —
+    se inyectan en el prompt de la pista para que la IA no sugiera
+    herramientas que el laboratorio no reconoce."""
+    d = (descripcion or "").lower()
+    fams = []
+    for regla in REGLAS_ITEMS:
+        if any(k in d for k in regla["kw"]):
+            for f in regla["fams"]:
+                if f not in fams:
+                    fams.append(f)
+    ejemplos = [FAMILIA_EJEMPLOS[f] for f in fams if f in FAMILIA_EJEMPLOS]
+    return "; ".join(ejemplos[:4])
+
+
+def item_verificable(descripcion: str) -> bool:
+    """True si la descripción calza con alguna regla de validación —
+    o sea, si existe algún comando del laboratorio que pueda completarla."""
+    d = (descripcion or "").lower()
+    if not d.strip():
+        return False
+    return any(any(k in d for k in regla["kw"]) for regla in REGLAS_ITEMS)
 
 
 def _normalizar_comando(comando: str) -> str:
@@ -227,6 +331,18 @@ def _porcentaje(items: dict) -> int:
     return round(sum(1 for v in items.values() if v) / len(items) * 100)
 
 
+def fmt_duracion(seg: int) -> str:
+    """Formato legible: '2 min 5 s', '45 s', '1 h 3 min'."""
+    seg = max(0, int(seg))
+    h, resto = divmod(seg, 3600)
+    m, s = divmod(resto, 60)
+    partes = []
+    if h: partes.append(f"{h} h")
+    if m: partes.append(f"{m} min")
+    if s and not h: partes.append(f"{s} s")
+    return " ".join(partes) or "0 s"
+
+
 def crear_sesion(bd: Session, usuario_id: int, ejercicio: EjercicioDocente) -> SesionEjercicio:
     # Cerrar cualquier sesión activa anterior (de este u otro ejercicio)
     previa = obtener_sesion_activa(bd, usuario_id)
@@ -242,17 +358,26 @@ def crear_sesion(bd: Session, usuario_id: int, ejercicio: EjercicioDocente) -> S
 
     # Niveles 6-7: escenario multi-vector con dos atacantes distintos
     multi = (ejercicio.nivel or 1) >= 6
-    ips = [_ip_aleatoria()]
+    ips = [_ip_aleatoria_libre(bd)]
     if multi:
-        ip2 = _ip_aleatoria()
+        ip2 = _ip_aleatoria_libre(bd)
         while ip2 == ips[0]:
-            ip2 = _ip_aleatoria()
+            ip2 = _ip_aleatoria_libre(bd)
         ips.append(ip2)
 
     items = {it.id: False for it in ejercicio.items}
-    # Plan de fases del ataque: si el estudiante no contiene al atacante,
-    # el incidente escala al 25%, 50% y 75% del tiempo disponible
-    total_seg = (ejercicio.tiempo_minutos or 10) * 60
+    # Duración efectiva: el cronómetro corre lo que dure el ejercicio, pero
+    # NUNCA más allá de la fecha límite (opción "el plazo es para entregar").
+    inicio = _ahora()
+    fin_por_duracion = inicio + timedelta(minutes=ejercicio.tiempo_minutos or 10)
+    fin_efectivo = fin_por_duracion
+    if ejercicio.fecha_limite:
+        fl = aware_utc(ejercicio.fecha_limite)
+        if fl < fin_efectivo:
+            fin_efectivo = fl
+    total_seg = max(1, int((fin_efectivo - inicio).total_seconds()))
+
+    # Plan de fases: el incidente escala al 25%, 50% y 75% del tiempo disponible
     plan_fases = [
         {"orden": 1, "en_seg": int(total_seg * 0.25), "estado": "pendiente"},
         {"orden": 2, "en_seg": int(total_seg * 0.50), "estado": "pendiente"},
@@ -267,8 +392,8 @@ def crear_sesion(bd: Session, usuario_id: int, ejercicio: EjercicioDocente) -> S
         ip_atacante=ips[0],
         ips_atacantes=json.dumps(ips) if multi else None,
         fases=json.dumps(plan_fases),
-        fecha_inicio=_ahora(),
-        fecha_limite=_ahora() + timedelta(minutes=ejercicio.tiempo_minutos or 10),
+        fecha_inicio=inicio,
+        fecha_limite=fin_efectivo,
     )
     bd.add(sesion)
     bd.commit()
@@ -290,11 +415,12 @@ def finalizar_sesion(bd: Session, sesion: SesionEjercicio, estado: str):
     tiempo_seg = int((_aware(sesion.fecha_fin) - _aware(sesion.fecha_inicio)).total_seconds())
 
     base = "Completado vía terminal" if estado == "completada" else "Tiempo agotado"
+    t_legible = fmt_duracion(tiempo_seg)
     if penal:
         respuesta = (f"{base}. Checklist: {pct}% — Penalización por {sesion.ayudas} ayuda(s): -{penal}% "
-                     f"→ Resultado: {pct_final}%. Tiempo: {tiempo_seg}s.")
+                     f"→ Resultado: {pct_final}%. Tiempo: {t_legible}.")
     else:
-        respuesta = f"{base}. Resultado: {pct_final}%. Tiempo: {tiempo_seg}s. Sin ayudas."
+        respuesta = f"{base}. Resultado: {pct_final}%. Tiempo: {t_legible}. Sin ayudas."
 
     entrega = bd.query(EntregaEjercicioDocente).filter(
         EntregaEjercicioDocente.ejercicio_id == sesion.ejercicio_id,
@@ -328,27 +454,39 @@ def _eventos_fase(bd: Session, sesion: SesionEjercicio, ejercicio: EjercicioDoce
     orden = fase.get("orden", 1)
     es_defensa = (ejercicio.tipo == "defensa") if ejercicio else True
 
-    if orden == 1:
-        if es_defensa:
+    if es_defensa:
+        # El atacante entrante escala si no se le contiene
+        if orden == 1:
             for i in range(1, 5):
                 bd.add(Evento(tipo_evento="Fuerza Bruta", ip_origen=ip, usuario_id=uid,
                               descripcion=f"Oleada 2: intento fallido #{i} — el atacante cambió de diccionario"))
+        elif orden == 2:
+            for i in range(1, 6):
+                bd.add(Evento(tipo_evento="Fuerza Bruta", ip_origen=ip, usuario_id=uid,
+                              descripcion=f"Escalada: ráfaga automatizada #{i} desde {ip} (velocidad x3)"))
+            bd.add(Alerta(titulo="Escalada del ataque en curso", severidad="Alta", usuario_id=uid,
+                          descripcion=f"La actividad desde {ip} se intensifica — sin contención aplicada"))
         else:
-            for p in ["8080", "3306", "5432", "6379"]:
-                bd.add(Evento(tipo_evento="Escaneo de Puertos", ip_origen=ip, usuario_id=uid,
-                              descripcion=f"Sonda profunda en puerto {p} desde {ip}"))
-    elif orden == 2:
-        for i in range(1, 6):
-            bd.add(Evento(tipo_evento="Fuerza Bruta" if es_defensa else "Escaneo de Puertos",
-                          ip_origen=ip, usuario_id=uid,
-                          descripcion=f"Escalada: ráfaga automatizada #{i} desde {ip} (velocidad x3)"))
-        bd.add(Alerta(titulo="Escalada del ataque en curso", severidad="Alta", usuario_id=uid,
-                      descripcion=f"La actividad desde {ip} se intensifica — sin contención aplicada"))
+            bd.add(Evento(tipo_evento="Intrusión", ip_origen=ip, usuario_id=uid,
+                          descripcion=f"CRÍTICO: acceso parcial conseguido desde {ip} — proceso sospechoso nc -lvp 4444"))
+            bd.add(Alerta(titulo="Posible intrusión — acceso parcial detectado", severidad="Crítica", usuario_id=uid,
+                          descripcion=f"El atacante {ip} logró avanzar. Contención inmediata requerida."))
     else:
-        bd.add(Evento(tipo_evento="Intrusión", ip_origen=ip, usuario_id=uid,
-                      descripcion=f"CRÍTICO: acceso parcial conseguido desde {ip} — proceso sospechoso nc -lvp 4444"))
-        bd.add(Alerta(titulo="Posible intrusión — acceso parcial detectado", severidad="Crítica", usuario_id=uid,
-                      descripcion=f"El atacante {ip} logró avanzar. Contención inmediata requerida."))
+        # Ataque: el objetivo detecta la auditoría y endurece sus defensas
+        # (ventana de oportunidad que se cierra — presión temporal ofensiva)
+        if orden == 1:
+            bd.add(Evento(tipo_evento="Objetivo Alerta", ip_origen=ip, usuario_id=uid,
+                          descripcion=f"El IDS del objetivo {ip} registró tu escaneo — el administrador fue notificado"))
+        elif orden == 2:
+            bd.add(Evento(tipo_evento="Objetivo Hardening", ip_origen=ip, usuario_id=uid,
+                          descripcion=f"El objetivo {ip} cerró un puerto y rotó credenciales — la ventana se reduce"))
+            bd.add(Alerta(titulo="El objetivo refuerza sus defensas", severidad="Alta", usuario_id=uid,
+                          descripcion=f"{ip} está endureciendo su configuración — completa la auditoría pronto"))
+        else:
+            bd.add(Evento(tipo_evento="Objetivo Bloqueo", ip_origen=ip, usuario_id=uid,
+                          descripcion=f"CRÍTICO: el objetivo {ip} bloqueó tu IP de origen — acceso casi cerrado"))
+            bd.add(Alerta(titulo="Ventana de oportunidad cerrándose", severidad="Crítica", usuario_id=uid,
+                          descripcion=f"El objetivo {ip} está por bloquear toda tu actividad. Finaliza ya."))
 
 
 def materializar_fases(bd: Session, sesion: SesionEjercicio) -> bool:
@@ -408,6 +546,17 @@ def verificar_expiracion(bd: Session, sesion: SesionEjercicio) -> bool:
     return False
 
 
+def finalizar_sesiones_vencidas(bd: Session):
+    """Barrido para vistas del docente: finaliza las sesiones vencidas de
+    CUALQUIER usuario (p. ej. estudiantes que cerraron el navegador y no
+    volvieron), generando sus entregas parciales para que el docente las vea."""
+    activas = bd.query(SesionEjercicio).filter(SesionEjercicio.estado == "activa").all()
+    ahora = _ahora()
+    for s in activas:
+        if ahora > _aware(s.fecha_limite):
+            finalizar_sesion(bd, s, "expirada")
+
+
 def sesion_a_dict(bd: Session, sesion: SesionEjercicio) -> dict:
     items_estado = _leer_items(sesion)
     items_db = bd.query(ItemEjercicioDocente).filter(
@@ -426,6 +575,8 @@ def sesion_a_dict(bd: Session, sesion: SesionEjercicio) -> dict:
         "id": sesion.id,
         "ejercicio_id": sesion.ejercicio_id,
         "estado": sesion.estado,
+        # Aviso pedagógico para niveles 6-7: hay más de un actor (sin revelar IPs)
+        "multi_vector": len(ips_maliciosas(sesion)) > 1,
         "porcentaje": pct,
         "penalizacion": penal,
         "porcentaje_final": max(0, pct - penal),

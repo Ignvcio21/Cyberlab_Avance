@@ -7,7 +7,7 @@ import BarraSuperior from "../componentes/BarraSuperior"
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
 const getAuthHeaders = () => ({
-  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
@@ -89,7 +89,7 @@ export default function Dashboard() {
 
   const cargarProgresoLecturaDesdeBackend = async (usuario) => {
     try {
-      const token = localStorage.getItem("token")
+      const token = sessionStorage.getItem("token")
       const r = await fetch(
         `${API_URL}/progreso/${encodeURIComponent(usuario)}`,
         { headers: { "Authorization": `Bearer ${token}` } }
@@ -121,7 +121,7 @@ export default function Dashboard() {
   const cargarStats = async () => {
     try {
       const d = await (await fetch(`${API_URL}/estadisticas`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+        headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` }
       })).json()
       setStats({
         total_eventos: d?.total_eventos ?? 0,
@@ -277,7 +277,7 @@ export default function Dashboard() {
   }, [historial])
 
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario")
+    const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
     setNombreUsuario(u)
   }, [router])

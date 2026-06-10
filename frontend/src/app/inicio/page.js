@@ -22,6 +22,8 @@ export default function InicioPlataforma() {
   const [progAtaque,  setProgAtaque]  = useState(vacioNiveles())
   const [progDefensa, setProgDefensa] = useState(vacioNiveles())
   const [anuncios, setAnuncios] = useState([])
+  // Pop-up de anuncios no leídos al entrar (los vistos se recuerdan por usuario)
+  const [popupAnuncios, setPopupAnuncios] = useState(null)
   const [entregasPend, setEntregasPend] = useState([])
   const [statsDocente, setStatsDocente] = useState(null)
   const [statsAnimadas, setStatsAnimadas] = useState({ estudiantes: 0, pendientes: 0, notaPromedio: 0, ejercicios: 0 })
@@ -67,16 +69,28 @@ export default function InicioPlataforma() {
   }
 
   useEffect(() => {
-    const nombre  = localStorage.getItem("nombre_display") || localStorage.getItem("nombre_usuario") || ""
-    const usuario = localStorage.getItem("nombre_usuario") || ""
-    const r       = localStorage.getItem("rol_usuario") || ""
+    const nombre  = sessionStorage.getItem("nombre_display") || sessionStorage.getItem("nombre_usuario") || ""
+    const usuario = sessionStorage.getItem("nombre_usuario") || ""
+    const r       = sessionStorage.getItem("rol_usuario") || ""
     setNombreUsuario(nombre); setRolUsuario(r)
-    if (usuario) cargarProgreso(usuario, localStorage.getItem("token") || "")
-    const tok = localStorage.getItem("token") || ""
+    if (usuario) cargarProgreso(usuario, sessionStorage.getItem("token") || "")
+    const tok = sessionStorage.getItem("token") || ""
     if (tok) {
       const hdr = { "Authorization": `Bearer ${tok}` }
       fetch(`${API_URL_INICIO}/anuncios`, { headers: hdr })
-        .then(r => r.json()).then(d => setAnuncios(d.anuncios || [])).catch(() => {})
+        .then(r => r.json()).then(d => {
+          const lista = d.anuncios || []
+          setAnuncios(lista)
+          // Mostrar como pop-up los anuncios que el usuario aún no ha visto
+          if (lista.length && usuario) {
+            let vistos = []
+            try { vistos = JSON.parse(localStorage.getItem(`cyberlab_anuncios_vistos_${usuario}`) || "[]") } catch {}
+            const nuevos = lista.filter(a => !vistos.includes(a.id))
+            if (nuevos.length) {
+              setPopupAnuncios([...nuevos].sort(a => a.tipo === "urgente" ? -1 : 1))
+            }
+          }
+        }).catch(() => {})
       // Si es docente/admin, cargar datos del panel
       if (r === "admin" || r === "docente") {
         Promise.all([
@@ -288,17 +302,70 @@ export default function InicioPlataforma() {
                 {resto.length > 0 && (
                   <div style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 12, overflow: "hidden", marginBottom: 10 }}>
                     {resto.map((a, i) => (
-                      <div key={a.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 16px", borderBottom: i < resto.length - 1 ? "1px solid rgba(255,255,255,.06)" : "none" }}>
+                      <div key={a.id} onClick={() => setPopupAnuncios([a])} title="Ver anuncio completo"
+                        style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 16px", cursor: "pointer", borderBottom: i < resto.length - 1 ? "1px solid rgba(255,255,255,.06)" : "none" }}>
                         <div style={{ width: 7, height: 7, borderRadius: "50%", background: colorTipo[a.tipo] || "#2997ff", flexShrink: 0, marginTop: 5 }} />
-                        <div>
+                        <div style={{ flex: 1 }}>
                           <span style={{ fontSize: 13, fontWeight: 700, color: "#f5f5f7" }}>{a.titulo}</span>
                           <span style={{ fontSize: 11, color: "#6e7681", marginLeft: 8 }}>· {a.autor}</span>
+                          <div style={{ fontSize: 12, color: "#aeaeb2", marginTop: 3, lineHeight: 1.5 }}>{a.mensaje}</div>
                         </div>
+                        <span style={{ fontSize: 11, color: "#2997ff", flexShrink: 0, marginTop: 3 }}>Ver →</span>
                       </div>
                     ))}
                   </div>
                 )}
                 <style>{`@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}`}</style>
+              </div>
+            )
+          })()}
+
+          {/* ── POP-UP: anuncios del profesor ── */}
+          {popupAnuncios && popupAnuncios.length > 0 && (() => {
+            const colorTipo = { urgente: "#ff453a", aviso: "#2997ff", info: "#ff9f0a" }
+            const cerrar = () => {
+              // Marcar como vistos todos los anuncios actuales de este usuario
+              const usuario = sessionStorage.getItem("nombre_usuario") || ""
+              if (usuario) {
+                try {
+                  const vistos = JSON.parse(localStorage.getItem(`cyberlab_anuncios_vistos_${usuario}`) || "[]")
+                  const nuevos = [...new Set([...vistos, ...anuncios.map(a => a.id), ...popupAnuncios.map(a => a.id)])]
+                  localStorage.setItem(`cyberlab_anuncios_vistos_${usuario}`, JSON.stringify(nuevos))
+                } catch {}
+              }
+              setPopupAnuncios(null)
+            }
+            return (
+              <div onClick={cerrar} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 20 }}>
+                <div onClick={e => e.stopPropagation()} style={{ background: "#1c1c1e", border: "1px solid rgba(41,151,255,.30)", borderRadius: 20, padding: "28px 30px", maxWidth: 520, width: "100%", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.6)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                    <span style={{ fontSize: 26 }}>📣</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: "#f5f5f7" }}>
+                        {popupAnuncios.length === 1 ? "Aviso del profesor" : `Tienes ${popupAnuncios.length} avisos del profesor`}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#8e8e93" }}>Publicado en CyberLab</div>
+                    </div>
+                    <button onClick={cerrar} style={{ background: "none", border: "none", color: "#8e8e93", fontSize: 18, cursor: "pointer" }}>✕</button>
+                  </div>
+                  <div style={{ display: "grid", gap: 12 }}>
+                    {popupAnuncios.map(a => (
+                      <div key={a.id} style={{ background: "rgba(255,255,255,.03)", border: `1px solid ${colorTipo[a.tipo] || "#2997ff"}44`, borderLeft: `4px solid ${colorTipo[a.tipo] || "#2997ff"}`, borderRadius: 12, padding: "14px 16px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: colorTipo[a.tipo] || "#2997ff", textTransform: "uppercase", letterSpacing: ".07em" }}>
+                            {a.tipo === "urgente" ? "🔴 Urgente" : a.tipo === "info" ? "🟠 Información" : "🔵 Aviso"}
+                          </span>
+                          <span style={{ fontSize: 11, color: "#6e7681" }}>· {a.autor}</span>
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#f5f5f7", marginBottom: 5 }}>{a.titulo}</div>
+                        <div style={{ fontSize: 13, color: "#c7c7cc", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{a.mensaje}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={cerrar} style={{ marginTop: 18, width: "100%", padding: "12px 0", borderRadius: 980, background: "#2997ff", color: "#fff", fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer" }}>
+                    Entendido
+                  </button>
+                </div>
               </div>
             )
           })()}

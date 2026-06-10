@@ -27,10 +27,10 @@ export default function InicioSesion() {
       })
       const datos = await respuesta.json()
       if (!respuesta.ok) { setMensaje(datos.detail || "Error al iniciar sesión"); return }
-      localStorage.setItem("nombre_usuario", datos.nombre_usuario)
-      localStorage.setItem("nombre_display", datos.nombre || datos.nombre_usuario)
-      if (datos.rol)   localStorage.setItem("rol_usuario", datos.rol)
-      if (datos.token) localStorage.setItem("token", datos.token)
+      sessionStorage.setItem("nombre_usuario", datos.nombre_usuario)
+      sessionStorage.setItem("nombre_display", datos.nombre || datos.nombre_usuario)
+      if (datos.rol)   sessionStorage.setItem("rol_usuario", datos.rol)
+      if (datos.token) sessionStorage.setItem("token", datos.token)
       router.push("/inicio")
     } catch { setMensaje("No se pudo conectar con el servidor") }
     finally { setCargando(false) }

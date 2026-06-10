@@ -8,7 +8,7 @@ import SidebarNav from "../componentes/SidebarNav"
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
 const getAuthHeaders = () => ({
-  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
@@ -46,8 +46,8 @@ export default function AdminContenido() {
   const [formEj, setFormEj] = useState({ descripcion:"", tipo:"ataque", comandos_objetivo:10, tiempo_limite_seg:300, leccion_id:"" })
 
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario") || ""
-    const r = localStorage.getItem("rol_usuario")    || ""
+    const u = sessionStorage.getItem("nombre_usuario") || ""
+    const r = sessionStorage.getItem("rol_usuario")    || ""
     if (!u || r !== "admin") { router.push("/inicio"); return }
     setNombreUsuario(u); setRolUsuario(r)
     cargarEstructura()
@@ -93,7 +93,7 @@ export default function AdminContenido() {
   const cargarEstructura = async () => {
     try {
       const r = await fetch(`${API_URL}/contenido/estructura`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+        headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` }
       })
       if (r.ok) { const d = await r.json(); setEstructura(d?.cursos||[]) }
     } catch {}

@@ -8,7 +8,7 @@ export default function GuardSesion({ children }) {
   const [listo, setListo] = useState(false)
 
   useEffect(() => {
-    const usuario = localStorage.getItem("nombre_usuario")
+    const usuario = sessionStorage.getItem("nombre_usuario")
     if (!usuario) {
       router.replace("/")
       return

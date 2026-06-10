@@ -5,7 +5,7 @@ import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 
 const API = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
-const h = () => ({ "Authorization": `Bearer ${localStorage.getItem("token") || ""}`, "Content-Type": "application/json" })
+const h = () => ({ "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`, "Content-Type": "application/json" })
 
 const TIPOS = [
   { val: "urgente", label: "⚠ Urgente", color: "#ff453a" },

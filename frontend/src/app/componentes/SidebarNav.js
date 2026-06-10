@@ -18,13 +18,13 @@ export default function SidebarNav({ paginaActiva }) {
   const [colapsado, setColapsado]         = useState(false)
 
   useEffect(() => {
-    setNombreUsuario(localStorage.getItem("nombre_usuario") || "")
-    setRolUsuario(localStorage.getItem("rol_usuario") || "")
+    setNombreUsuario(sessionStorage.getItem("nombre_usuario") || "")
+    setRolUsuario(sessionStorage.getItem("rol_usuario") || "")
   }, [])
 
   const salir = () => {
-    localStorage.removeItem("nombre_usuario")
-    localStorage.removeItem("rol_usuario")
+    sessionStorage.removeItem("nombre_usuario")
+    sessionStorage.removeItem("rol_usuario")
     router.push("/")
   }
 

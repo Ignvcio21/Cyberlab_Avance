@@ -210,7 +210,8 @@ class ItemEjercicioDocenteEntrada(BaseModel):
 
 
 class SolicitudCrearEjercicioDocente(BaseModel):
-    titulo: str
+    # Opcional: si no se entrega, el backend genera uno según tipo y nivel
+    titulo: Optional[str] = None
     descripcion: str
     instrucciones: Optional[str] = None
     tipo: str = "ataque"

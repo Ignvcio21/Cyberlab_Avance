@@ -12,7 +12,7 @@ marked.setOptions({ mangle: false, headerIds: false })
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
 const getAuthHeaders = () => ({
-  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
@@ -133,7 +133,7 @@ export default function InformacionDashboard() {
   const cargarProgresoAtaqueDesdeBackend = async (usuario) => {
     try {
       const r = await fetch(`${API_URL}/progreso/${encodeURIComponent(usuario)}`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+        headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` }
       })
       if (!r.ok) return
       const d = await r.json()
@@ -189,7 +189,7 @@ export default function InformacionDashboard() {
   const cargarNivelesDesbloqueadosAtaque = async (usuario) => {
     try {
       const r = await fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+        headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` }
       })
       if (!r.ok) return
       const d = await r.json()
@@ -258,7 +258,7 @@ export default function InformacionDashboard() {
 
   // ── Init usuario ───────────────────────────────────────────────
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario")
+    const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
     setNombreUsuario(u)
   }, [router])

@@ -8,7 +8,7 @@ import BarraSuperior from "../componentes/BarraSuperior"
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
 const getAuthHeaders = () => ({
-  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json",
 })
 
@@ -557,7 +557,7 @@ export default function EstadisticasPage() {
   const [rol, setRol] = useState("")
 
   useEffect(() => {
-    setRol(localStorage.getItem("rol_usuario") || "")
+    setRol(sessionStorage.getItem("rol_usuario") || "")
   }, [])
 
   const ComponenteActivo = TABS.find(t => t.id === tabActiva)?.Componente

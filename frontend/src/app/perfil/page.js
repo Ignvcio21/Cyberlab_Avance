@@ -6,7 +6,7 @@ import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 
 const API = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
-const h = () => ({ "Authorization": `Bearer ${localStorage.getItem("token") || ""}`, "Content-Type": "application/json" })
+const h = () => ({ "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`, "Content-Type": "application/json" })
 
 const ROLES = { admin: "#f59e0b", docente: "#2997ff", estudiante: "#30d158" }
 
@@ -73,7 +73,7 @@ export default function PerfilPage() {
           }, 2000)
         } else {
           setMsgPerfil({ texto: "Perfil actualizado correctamente", tipo: "ok" })
-          localStorage.setItem("nombre_display", nombre)
+          sessionStorage.setItem("nombre_display", nombre)
           setPerfil(prev => ({ ...prev, nombre }))
         }
       } else {

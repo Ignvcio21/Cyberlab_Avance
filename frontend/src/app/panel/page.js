@@ -1,14 +1,26 @@
 "use client"
 
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo, useRef } from "react"
 import { useRouter } from "next/navigation"
 import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
+// Nombres de los niveles según el tipo de ejercicio (coinciden con los dashboards)
+const NOMBRES_NIVELES_FORM = {
+  ataque: {
+    1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración", 4: "Explotación",
+    5: "Post-explotación", 6: "Avanzado", 7: "Operación completa",
+  },
+  defensa: {
+    1: "Monitoreo Básico", 2: "Detección de Fuerza Bruta", 3: "Escaneo — Defensa",
+    4: "Investigación de Incidentes", 5: "Respuesta Activa", 6: "Multi-vector", 7: "Defensa Integral",
+  },
+}
+
 const getAuthHeaders = () => ({
-  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
@@ -322,12 +334,13 @@ export default function PanelDocente() {
   const [modalEntrega,        setModalEntrega]        = useState(null)
   const [notaEntrega,         setNotaEntrega]         = useState("")
   const [comentariosEntrega,  setComentariosEntrega]  = useState("")
+  const creandoRef = useRef(false)  // evita doble creación de ejercicio
 
   const esAdmin = rolUsuario === "admin"
 
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario") || ""
-    const r = localStorage.getItem("rol_usuario")    || ""
+    const u = sessionStorage.getItem("nombre_usuario") || ""
+    const r = sessionStorage.getItem("rol_usuario")    || ""
     if (!u) { router.push("/"); return }
     if (r !== "admin" && r !== "docente") { router.push("/inicio"); return }
     setNombreUsuario(u); setRolUsuario(r)
@@ -345,7 +358,7 @@ export default function PanelDocente() {
     try {
       const r = await fetch(
         `${API_URL}/docente/intentos?nombre_usuario_docente=${encodeURIComponent(nombreUsuario)}`,
-        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
+        { headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
@@ -360,7 +373,7 @@ export default function PanelDocente() {
     try {
       const r = await fetch(
         `${API_URL}/admin/usuarios`,
-        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
+        { headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
@@ -424,7 +437,7 @@ export default function PanelDocente() {
     try {
       const r = await fetch(
         `${API_URL}/docente/estudiante/${encodeURIComponent(nombreUsuario)}/entregas`,
-        { headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` } }
+        { headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()
       if (r.ok) setEntregasPerfil(Array.isArray(d) ? d : [])
@@ -548,15 +561,17 @@ export default function PanelDocente() {
 
   const crearEjercicio = async (e) => {
     e.preventDefault()
-    if (!ejTitulo.trim() || !ejDescripcion.trim()) { setMensaje("Título y descripción son obligatorios"); return }
+    if (creandoRef.current) return  // evita doble envío (doble clic / reintento)
+    if (!ejDescripcion.trim()) { setMensaje("La descripción es obligatoria"); return }
     if (!ejFechaLimite) { setMensaje("La fecha y hora límite de entrega es obligatoria"); return }
     const itemsValidos = ejItems.map((d, i) => ({ descripcion: d.trim(), orden: i + 1 })).filter(it => it.descripcion)
+    creandoRef.current = true
     setMensaje(""); setCargando(true); window.cyberProgress?.start()
     try {
       const r = await fetch(`${API_URL}/ejercicios-docente/crear`, {
         method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
-          titulo: ejTitulo.trim(),
+          titulo: ejTitulo.trim() || null,
           descripcion: ejDescripcion.trim(),
           instrucciones: ejInstrucciones.trim() || null,
           tipo: ejTipo,
@@ -575,7 +590,7 @@ export default function PanelDocente() {
       setVistaEjercicios("lista")
       await cargarEjercicios()
     } catch { setMensaje("No se pudo conectar con el servidor") }
-    finally { setCargando(false); window.cyberProgress?.end() }
+    finally { creandoRef.current = false; setCargando(false); window.cyberProgress?.end() }
   }
 
   const eliminarEjercicio = async (id) => {
@@ -999,13 +1014,9 @@ export default function PanelDocente() {
                       <div>
                         <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Nivel de dificultad *</label>
                         <select className="campo-inicio" value={ejNivel} onChange={e => setEjNivel(e.target.value)}>
-                          <option value={1}>Nivel 1 — Introducción</option>
-                          <option value={2}>Nivel 2 — Reconocimiento</option>
-                          <option value={3}>Nivel 3 — Enumeración</option>
-                          <option value={4}>Nivel 4 — Explotación básica</option>
-                          <option value={5}>Nivel 5 — Post-explotación</option>
-                          <option value={6}>Nivel 6 — Técnicas avanzadas</option>
-                          <option value={7}>Nivel 7 — Operación completa</option>
+                          {[1,2,3,4,5,6,7].map(n => (
+                            <option key={n} value={n}>Nivel {n} — {NOMBRES_NIVELES_FORM[ejTipo]?.[n] || ""}</option>
+                          ))}
                         </select>
                       </div>
                     </div>
@@ -1048,11 +1059,11 @@ export default function PanelDocente() {
                       </div>
                     </div>
                     <div>
-                      <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Título *</label>
+                      <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:4, textTransform:"uppercase", letterSpacing:1 }}>Título (opcional)</label>
                       <div style={{ display:"flex", gap:8 }}>
                         <input
                           className="campo-inicio"
-                          placeholder="Ej: Escaneo de red con Nmap"
+                          placeholder={`Vacío = "${ejTipo === "ataque" ? "Ataque" : "Defensa"} — Nivel ${ejNivel}: ${NOMBRES_NIVELES_FORM[ejTipo]?.[ejNivel] || ""}"`}
                           value={ejTitulo} onChange={e => setEjTitulo(e.target.value)}
                           style={{ flex:1 }}
                         />

@@ -42,7 +42,7 @@ export default function PaginaNotas() {
   const [ordenDesc,     setOrdenDesc]     = useState(true)
 
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario")
+    const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
     setNombreUsuario(u)
   }, [router])
@@ -51,7 +51,7 @@ export default function PaginaNotas() {
     if (!nombreUsuario) return
     setCargando(true)
     fetch(`${API_URL}/mis-evaluaciones?nombre_usuario=${encodeURIComponent(nombreUsuario)}`, {
-      headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+      headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` }
     })
       .then(r => r.json())
       .then(d => setIntentos(Array.isArray(d) ? d : (d?.intentos || [])))

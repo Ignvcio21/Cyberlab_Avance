@@ -99,7 +99,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ORIGENES_PERMITIDOS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -1255,6 +1255,27 @@ def crear_ejercicio_docente(
 ):
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Solo docentes y admin pueden crear ejercicios")
+
+    # Título opcional: si no se entrega, se genera según tipo y nivel
+    NOMBRES_NIVEL_ATAQUE = {1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración", 4: "Explotación", 5: "Post-explotación", 6: "Avanzado", 7: "Operación completa"}
+    NOMBRES_NIVEL_DEFENSA = {1: "Monitoreo básico", 2: "Detección de fuerza bruta", 3: "Reconocimiento entrante", 4: "Investigación de incidentes", 5: "Respuesta activa", 6: "Multi-vector", 7: "SOC integral"}
+    titulo = (datos.titulo or "").strip()
+    if not titulo:
+        nombres = NOMBRES_NIVEL_ATAQUE if datos.tipo == "ataque" else NOMBRES_NIVEL_DEFENSA
+        titulo = f"{'Ataque' if datos.tipo == 'ataque' else 'Defensa'} — Nivel {datos.nivel}: {nombres.get(datos.nivel, '')}"
+
+    # Anti-duplicado: si el mismo docente creó un ejercicio idéntico hace
+    # menos de 2 minutos (típico reintento del navegador tras un timeout
+    # mientras la IA generaba el escenario), se devuelve el existente
+    reciente = bd.query(EjercicioDocente).filter(
+        EjercicioDocente.creado_por_id == usuario_actual.id,
+        EjercicioDocente.descripcion == datos.descripcion,
+        EjercicioDocente.tipo == datos.tipo,
+        EjercicioDocente.nivel == datos.nivel,
+    ).order_by(EjercicioDocente.id.desc()).first()
+    if reciente and reciente.fecha_creacion and (datetime.now(timezone.utc) - aware_utc(reciente.fecha_creacion)).total_seconds() < 120:
+        return {"mensaje": "Ejercicio creado", "id": reciente.id}
+
     # Generar escenario/contexto con IA
     contexto_ia = None
     try:
@@ -1293,7 +1314,7 @@ def crear_ejercicio_docente(
             f"Tipo: {'Ataque (pentesting)' if datos.tipo == 'ataque' else 'Defensa (SOC/Blue Team)'}\n"
             f"Nivel {datos.nivel} — Tema: {tema_nivel_ctx}\n"
             f"Complejidad del escenario: {complejidad_ctx}\n"
-            f"Título: {datos.titulo}\n"
+            f"Título: {titulo}\n"
             f"Objetivos del ejercicio:\n{items_texto}\n\n"
             f"Genera un escenario de 3-4 párrafos con: nombre de empresa ficticia, descripción del incidente o situación, "
             f"qué rol juega el estudiante, y datos técnicos de contexto (IPs ficticias, servicios, fechas, síntomas observados). "
@@ -1307,10 +1328,10 @@ def crear_ejercicio_docente(
         )
         contexto_ia = resp.choices[0].message.content.strip()
     except Exception:
-        contexto_ia = f"Escenario: {datos.titulo}\n\n{datos.descripcion}"
+        contexto_ia = f"Escenario: {titulo}\n\n{datos.descripcion}"
 
     ejercicio = EjercicioDocente(
-        titulo=datos.titulo,
+        titulo=titulo,
         descripcion=datos.descripcion,
         instrucciones=datos.instrucciones,
         tipo=datos.tipo,

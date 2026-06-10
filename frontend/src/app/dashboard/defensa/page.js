@@ -12,7 +12,7 @@ import TransicionPagina from "../../componentes/TransicionPagina"
 const API = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
 const getAuthHeaders = () => ({
-  "Authorization": `Bearer ${localStorage.getItem("token") || ""}`,
+  "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
@@ -80,7 +80,7 @@ export default function DefensaDashboard() {
   const cargarStats = async () => {
     try {
       const d = await (await fetch(`${API}/estadisticas`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem("token") || ""}` }
+        headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` }
       })).json()
       setStats({
         total_eventos: d?.total_eventos ?? 0,
@@ -258,7 +258,7 @@ export default function DefensaDashboard() {
   }, [historial])
 
   useEffect(() => {
-    const u = localStorage.getItem("nombre_usuario")
+    const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
     setNombreUsuario(u)
   }, [router])

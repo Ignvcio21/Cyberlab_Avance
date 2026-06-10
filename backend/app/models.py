@@ -31,6 +31,8 @@ class Evento(Base):
     tipo_evento = Column(String, nullable=False)
     ip_origen = Column(String, nullable=False)
     descripcion = Column(Text, nullable=False)
+    # Dueño del evento: cada estudiante ve solo su propio laboratorio
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True, index=True)
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -42,6 +44,8 @@ class Alerta(Base):
     severidad = Column(String, nullable=False)
     descripcion = Column(Text, nullable=False)
     evento_id = Column(Integer, ForeignKey("eventos.id"), nullable=True)
+    # Dueño de la alerta: cada estudiante ve solo su propio laboratorio
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True, index=True)
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -342,3 +346,33 @@ class AnuncioDocente(Base):
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 
     autor = relationship("Usuario")
+
+
+class SesionEjercicio(Base):
+    """Sesión activa de un ejercicio docente. El backend es la fuente de verdad
+    del checklist, el temporizador y el resultado — el frontend solo visualiza."""
+    __tablename__ = "sesiones_ejercicio"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    ejercicio_id = Column(Integer, ForeignKey("ejercicios_docente.id"), nullable=False, index=True)
+
+    estado = Column(String, nullable=False, default="activa")  # activa | completada | expirada
+    items_estado = Column(Text, nullable=False, default="{}")  # JSON {item_id: bool}
+    ayudas = Column(Integer, nullable=False, default=0)
+    # IP del atacante del escenario — generada por el servidor y nunca
+    # expuesta al cliente: el estudiante debe descubrirla en los logs
+    ip_atacante = Column(String, nullable=True)
+    # Niveles 6-7 (multi-vector): JSON con todas las IPs maliciosas;
+    # ip_atacante mantiene la principal por compatibilidad
+    ips_atacantes = Column(Text, nullable=True)
+    # Plan de fases del ataque en tiempo real (JSON): el ataque escala
+    # con el tiempo si el estudiante no lo contiene
+    fases = Column(Text, nullable=False, default="[]")
+
+    fecha_inicio = Column(DateTime(timezone=True), server_default=func.now())
+    fecha_limite = Column(DateTime(timezone=True), nullable=False)
+    fecha_fin = Column(DateTime(timezone=True), nullable=True)
+
+    usuario = relationship("Usuario", foreign_keys=[usuario_id])
+    ejercicio = relationship("EjercicioDocente", foreign_keys=[ejercicio_id])

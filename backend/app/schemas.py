@@ -80,15 +80,6 @@ class SolicitudActualizarProgreso(BaseModel):
     porcentaje: int
 
 
-class SolicitudCrearIntento(BaseModel):
-    nombre_usuario: str
-    ejercicio_id: int
-    tiempo_seg: int
-    errores: int
-    porcentaje: int
-    estado: str
-
-
 class SolicitudEvaluarIntento(BaseModel):
     nombre_usuario_docente: str
     intento_id: int
@@ -137,6 +128,8 @@ class SolicitudTerminal(BaseModel):
 
 class RespuestaTerminal(BaseModel):
     salida: str
+    # Estado de la sesión de ejercicio activa, validado por el backend
+    sesion: dict | None = None
 
 
 # ============================

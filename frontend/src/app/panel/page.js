@@ -663,7 +663,6 @@ export default function PanelDocente() {
   }
 
   const usarIa = async () => {
-    if (!ejTitulo.trim()) { setMensaje("Escribe primero el título del ejercicio"); return }
     setCargandoIa(true); setMensaje("")
     const nivelNum = Number(ejNivel) || 1
     const contextoNivel = CONTEXTO_NIVELES_IA[ejTipo]?.[nivelNum] || ""
@@ -671,7 +670,7 @@ export default function PanelDocente() {
       const r = await fetch(`${API_URL}/ejercicios-docente/ia-asistir`, {
         method: "POST", headers: getAuthHeaders(),
         body: JSON.stringify({
-          titulo: ejTitulo.trim(),
+          titulo: ejTitulo.trim() || null,
           tipo: ejTipo,
           nivel: nivelNum,
           num_puntos: Number(iaNumPuntos) || 4,
@@ -1576,7 +1575,10 @@ export default function PanelDocente() {
             </div>
             <div className="modal-cuerpo">
               <p style={{ fontSize:13, color:"var(--texto-secundario)", marginTop:0, lineHeight:1.6 }}>
-                La IA generará el ejercicio para <strong style={{ color:"#fff" }}>Nivel {ejNivel}</strong> de <strong style={{ color:"#fff" }}>{ejTipo === "ataque" ? "⚔ Ataque" : "🛡 Defensa"}</strong> basándose en el título <strong style={{ color:"#fff" }}>"{ejTitulo || "(vacío)"}"</strong>.
+                La IA generará el ejercicio para <strong style={{ color:"#fff" }}>Nivel {ejNivel}</strong> de <strong style={{ color:"#fff" }}>{ejTipo === "ataque" ? "⚔ Ataque" : "🛡 Defensa"}</strong>
+                {ejTitulo.trim()
+                  ? <> basándose en el título <strong style={{ color:"#fff" }}>&quot;{ejTitulo}&quot;</strong>.</>
+                  : <>, tomando como referencia el <strong style={{ color:"#fff" }}>tema del nivel</strong> (sin título específico).</>}
               </p>
               {/* Descripción del nivel para que el docente sepa qué corresponde */}
               <div style={{ fontSize:12, color:"#86efac", background:"rgba(48,209,88,0.06)", border:"1px solid rgba(48,209,88,0.20)", borderRadius:8, padding:"10px 12px", marginBottom:4, lineHeight:1.6 }}>
@@ -1601,7 +1603,7 @@ export default function PanelDocente() {
               <button
                 className="boton-principal"
                 onClick={usarIa}
-                disabled={cargandoIa || !ejTitulo.trim()}
+                disabled={cargandoIa}
                 style={{ width:"100%" }}
               >
                 {cargandoIa ? "Generando..." : "Generar con IA"}

@@ -223,7 +223,7 @@ class SolicitudCrearEjercicioDocente(BaseModel):
 
 
 class SolicitudIaAsistir(BaseModel):
-    titulo: str
+    titulo: Optional[str] = None
     tipo: str = "ataque"
     nivel: int = 1
     num_puntos: int = 4

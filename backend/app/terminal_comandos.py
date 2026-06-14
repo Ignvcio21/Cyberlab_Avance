@@ -10,12 +10,14 @@ está implementado (en cuyo caso el endpoint delega en la IA).
 import re
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from .models import (
     Usuario, Evento, Alerta, IpBloqueada, AccionUsuario,
     EscenarioActivoUsuario, EscenarioInstancia, VariableInstancia,
     BloqueoEscenario,
 )
+from .sesiones import ips_maliciosas
 
 # ── Helpers de laboratorio (scope por usuario) ────────────────────
 
@@ -27,6 +29,32 @@ def q_eventos(bd: Session, usuario_id: int):
 def q_alertas(bd: Session, usuario_id: int):
     """Alertas del laboratorio del usuario (cada estudiante ve solo el suyo)."""
     return bd.query(Alerta).filter(Alerta.usuario_id == usuario_id)
+
+
+def q_bloqueadas(bd: Session, usuario_id: int):
+    """IPs bloqueadas en el firewall del propio usuario (aislado por estudiante)."""
+    return bd.query(IpBloqueada).filter(IpBloqueada.usuario_id == usuario_id)
+
+
+def _bloquear_ip(bd: Session, usuario_id: int, ip: str, motivo: str):
+    """Bloquea una IP en el firewall del usuario; tolera la carrera (otra
+    petición pudo bloquearla a la vez) sin reventar con IntegrityError."""
+    if q_bloqueadas(bd, usuario_id).filter(IpBloqueada.direccion_ip == ip).first():
+        return
+    bd.add(IpBloqueada(usuario_id=usuario_id, direccion_ip=ip, motivo=motivo))
+    try:
+        bd.commit()
+    except IntegrityError:
+        bd.rollback()  # ya estaba bloqueada por otra petición concurrente
+
+
+def _desbloquear_ip(bd: Session, usuario_id: int, ip: str) -> bool:
+    """Quita el bloqueo de una IP del firewall del usuario. True si existía."""
+    existe = q_bloqueadas(bd, usuario_id).filter(IpBloqueada.direccion_ip == ip).first()
+    if existe:
+        bd.delete(existe); bd.commit()
+        return True
+    return False
 
 
 def obtener_instancia_activa_usuario(bd: Session, usuario_id: int):
@@ -165,8 +193,8 @@ def atk_show_blocked(bd, usuario, m, ctx):
     if inst:
         ips = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id).all()
     if not ips:
-        # Fallback: bloqueos globales del firewall del laboratorio
-        ips_glob = bd.query(IpBloqueada).order_by(IpBloqueada.id.desc()).limit(10).all()
+        # Fallback: bloqueos del firewall del propio usuario
+        ips_glob = q_bloqueadas(bd, usuario.id).order_by(IpBloqueada.id.desc()).limit(10).all()
         if not ips_glob: return "No hay IPs bloqueadas."
         return "IPs BLOQUEADAS:\n" + "\n".join(f"  DROP  {ip.direccion_ip}  # {ip.motivo}" for ip in ips_glob)
     return "IPs BLOQUEADAS:\n" + "\n".join(f"  DROP  {ip.direccion_ip}  # {ip.motivo}" for ip in ips)
@@ -206,7 +234,7 @@ def atk_show_sessions(bd, usuario, m, ctx):
 def atk_show_hosts(bd, usuario, m, ctx):
     ips = list(set(e.ip_origen for e in q_eventos(bd, usuario.id).order_by(Evento.fecha_creacion.desc()).limit(20).all()))
     if not ips: return "No se detectaron hosts activos."
-    bloqueadas = {ip.direccion_ip for ip in bd.query(IpBloqueada).all()}
+    bloqueadas = {ip.direccion_ip for ip in q_bloqueadas(bd, usuario.id).all()}
     return "HOSTS DETECTADOS:\n" + "\n".join(
         f"  {ip:<18} {'[BLOQUEADA]' if ip in bloqueadas else '[ACTIVA]'}"
         for ip in ips[:8]
@@ -255,20 +283,27 @@ def atk_show_vulns(bd, usuario, m, ctx):
 def atk_resolve_host(bd, usuario, m, ctx):
     ev = q_eventos(bd, usuario.id).order_by(Evento.fecha_creacion.desc()).first()
     ip_o = ev.ip_origen if ev else "192.168.1.100"
-    return f"PTR {ip_o}: attacker-{ip_o.replace('.', '-')}.malicious.net\nASN: AS666 (malicious-hosting)\nReputación: MALICIOSA — listada en 3 blocklists"
+    sesion = ctx.get("sesion")
+    ips_mal = ips_maliciosas(sesion) if sesion else []
+    if ip_o in ips_mal:
+        return f"PTR {ip_o}: attacker-{ip_o.replace('.', '-')}.malicious.net\nASN: AS666 (malicious-hosting)\nReputación: MALICIOSA — listada en 3 blocklists"
+    return f"PTR {ip_o}: host-{ip_o.replace('.', '-')}.isp-client.net\nASN: AS1234 (standard-isp)\nReputación: LEGÍTIMA — sin registros en blocklists"
 
 
 @comando(r"^trace ip$", REGISTRO_ATAQUE)
 def atk_trace_ip(bd, usuario, m, ctx):
     ev = q_eventos(bd, usuario.id).order_by(Evento.fecha_creacion.desc()).first()
     ip_o = ev.ip_origen if ev else "?"
-    return f"traceroute to {ip_o}:\n  1  192.168.1.1   1.2 ms\n  2  10.0.0.1      8.4 ms\n  3  {ip_o}   42.1 ms  TARGET"
+    sesion = ctx.get("sesion")
+    ips_mal = ips_maliciosas(sesion) if sesion else []
+    etiqueta = "ATTACKER" if ip_o in ips_mal else "KNOWN-HOST"
+    return f"traceroute to {ip_o}:\n  1  192.168.1.1   1.2 ms\n  2  10.0.0.1      8.4 ms\n  3  {ip_o}   42.1 ms  {etiqueta}"
 
 
 @comando(r"^export report$", REGISTRO_ATAQUE)
 def atk_export_report(bd, usuario, m, ctx):
     total_e = q_eventos(bd, usuario.id).count(); total_a = q_alertas(bd, usuario.id).count()
-    bloq = bd.query(IpBloqueada).count()
+    bloq = q_bloqueadas(bd, usuario.id).count()
     acciones = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == usuario.id).count()
     ruta = f"/home/kali/reports/incident_{usuario.nombre_usuario}.txt"
     return (
@@ -289,8 +324,7 @@ def atk_block_ip(bd, usuario, m, ctx):
     if inst:
         if not bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_txt).first():
             bd.add(BloqueoEscenario(escenario_id=inst.id, direccion_ip=ip_txt, motivo="Manual block")); bd.commit()
-    if not bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_txt).first():
-        bd.add(IpBloqueada(direccion_ip=ip_txt, motivo="Manual block")); bd.commit()
+    _bloquear_ip(bd, usuario.id, ip_txt, "Manual block")
     return f"iptables -A INPUT -s {ip_txt} -j DROP\n→ {ip_txt} bloqueada correctamente."
 
 
@@ -301,9 +335,7 @@ def atk_unblock_ip(bd, usuario, m, ctx):
     if inst:
         bloq = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_txt).first()
         if bloq: bd.delete(bloq); bd.commit()
-    existe = bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_txt).first()
-    if existe:
-        bd.delete(existe); bd.commit()
+    if _desbloquear_ip(bd, usuario.id, ip_txt):
         return f"iptables -D INPUT -s {ip_txt} -j DROP\n→ {ip_txt} desbloqueada."
     return f"{ip_txt} no estaba bloqueada."
 
@@ -440,7 +472,7 @@ def def_nmap(bd, usuario, m, ctx):
     evs    = q_eventos(bd, usuario.id).filter(Evento.ip_origen == ip_obj).all()
     total  = len(evs)
     tipos  = list(set(e.tipo_evento for e in evs))
-    bloq   = bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_obj).first()
+    bloq   = q_bloqueadas(bd, usuario.id).filter(IpBloqueada.direccion_ip == ip_obj).first()
     riesgo = "CRÍTICO" if total >= 8 else "ALTO" if total >= 4 else "MEDIO" if total >= 2 else "BAJO"
     return (
         f"Starting Nmap 7.94 ( https://nmap.org )\n"
@@ -506,24 +538,21 @@ def def_iptables_block(bd, usuario, m, ctx):
     if inst:
         if not bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_obj).first():
             bd.add(BloqueoEscenario(escenario_id=inst.id, direccion_ip=ip_obj, motivo="iptables DROP rule")); bd.commit()
-    if not bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_obj).first():
-        bd.add(IpBloqueada(direccion_ip=ip_obj, motivo=f"iptables -A INPUT -s {ip_obj} -j DROP")); bd.commit()
+    _bloquear_ip(bd, usuario.id, ip_obj, f"iptables -A INPUT -s {ip_obj} -j DROP")
     return f"# regla DROP aplicada para {ip_obj}\n# iptables -L INPUT -n para verificar"
 
 
 @comando(r"^iptables .*-d .*-s (\S+).*drop.*$", REGISTRO_DEFENSA)
 def def_iptables_unblock(bd, usuario, m, ctx):
     ip_obj = m.group(1)
-    existe = bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip_obj).first()
-    if existe:
-        bd.delete(existe); bd.commit()
+    if _desbloquear_ip(bd, usuario.id, ip_obj):
         return f"# regla DROP eliminada para {ip_obj}"
     return f"iptables: Bad rule (does not exist): No such file or directory — {ip_obj} not in chain"
 
 
 @comando(r"^iptables -l input -n$", REGISTRO_DEFENSA)
 def def_iptables_list_input(bd, usuario, m, ctx):
-    ips = bd.query(IpBloqueada).order_by(IpBloqueada.id.desc()).all()
+    ips = q_bloqueadas(bd, usuario.id).order_by(IpBloqueada.id.desc()).all()
     lineas = ["Chain INPUT (policy ACCEPT)", "target     prot opt source               destination"]
     for ip in ips: lineas.append(f"DROP       all  --  {ip.direccion_ip:<20} 0.0.0.0/0")
     return "\n".join(lineas)
@@ -531,8 +560,8 @@ def def_iptables_list_input(bd, usuario, m, ctx):
 
 @comando(r"^iptables -l\b.*$", REGISTRO_DEFENSA)
 def def_iptables_list(bd, usuario, m, ctx):
-    total_b = bd.query(IpBloqueada).count()
-    ips = bd.query(IpBloqueada).order_by(IpBloqueada.id.desc()).limit(5).all()
+    total_b = q_bloqueadas(bd, usuario.id).count()
+    ips = q_bloqueadas(bd, usuario.id).order_by(IpBloqueada.id.desc()).limit(5).all()
     lineas = [f"Chain INPUT (policy ACCEPT {total_b} rules)",
               "pkts bytes target  prot opt in  out  source      destination"]
     for ip in ips:
@@ -569,7 +598,7 @@ def def_tail_nginx(bd, usuario, m, ctx):
 
 @comando(r"^systemctl status$", REGISTRO_DEFENSA)
 def def_systemctl(bd, usuario, m, ctx):
-    total_e = q_eventos(bd, usuario.id).count(); total_a = q_alertas(bd, usuario.id).count(); total_b = bd.query(IpBloqueada).count()
+    total_e = q_eventos(bd, usuario.id).count(); total_a = q_alertas(bd, usuario.id).count(); total_b = q_bloqueadas(bd, usuario.id).count()
     riesgo  = "degraded" if total_a >= 2 else "running"
     return (
         f"● soc-lab\n"
@@ -630,7 +659,7 @@ def def_lastb(bd, usuario, m, ctx):
 
 @comando(r"^export-report$", REGISTRO_DEFENSA)
 def def_export_report(bd, usuario, m, ctx):
-    total_e = q_eventos(bd, usuario.id).count(); total_a = q_alertas(bd, usuario.id).count(); total_b = bd.query(IpBloqueada).count()
+    total_e = q_eventos(bd, usuario.id).count(); total_a = q_alertas(bd, usuario.id).count(); total_b = q_bloqueadas(bd, usuario.id).count()
     return (
         f"=== INCIDENT REPORT — CyberLab SOC ===\n"
         f"Analista: {usuario.nombre_usuario}\n"

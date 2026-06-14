@@ -123,16 +123,7 @@ export default function BarraSuperior({ paginaActiva }) {
             className={`pildora-nav ${paginaActiva === "estadisticas" ? "activa" : ""}`}
             onClick={() => ir("/estadisticas")} type="button"
           >
-            ◈ Estadísticas
-          </button>
-        )}
-
-        {puedeVerPanel && (
-          <button
-            className={`pildora-nav ${paginaActiva === "anuncios" ? "activa" : ""}`}
-            onClick={() => ir("/anuncios")} type="button"
-          >
-            Anuncios
+            ◈ Exportar
           </button>
         )}
       </nav>

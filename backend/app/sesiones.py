@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from .models import (
     SesionEjercicio, EjercicioDocente, ItemEjercicioDocente,
     EntregaEjercicioDocente, Evento, Alerta, IpBloqueada,
+    AccionUsuario,
 )
 
 # ── Familias de comandos (matching por intención) ─────────────────
@@ -110,19 +111,32 @@ KW_ITEM_IP      = [
     # de "objetivo" — enumerar servicios o vulns no requieren IP en el comando)
     "host objetivo", "escanear el host", "escanear el objetivo", "ip objetivo",
 ]
+# Items de documentación: el reporte solo tiene sentido DESPUÉS de investigar.
+# Evita que `report` como primer comando marque el paso sin haber hecho nada.
+KW_ITEM_DOC = [
+    "documentar", "documenta", "reporte", "reportar", "reporta",
+    "informe", "registrar el incidente", "generar reporte", "generar el reporte",
+]
+
+
+def _es_item_documentacion(descripcion: str) -> bool:
+    d = (descripcion or "").lower()
+    return any(k in d for k in KW_ITEM_DOC)
 
 
 def _ip_aleatoria() -> str:
     return f"192.168.{random.randint(1, 10)}.{random.randint(10, 250)}"
 
 
-def _ip_aleatoria_libre(bd: Session) -> str:
-    """Sortea una IP que NO esté ya bloqueada en el firewall del
-    laboratorio: si una sesión nueva reutilizara una IP bloqueada por un
-    ejercicio anterior, el paso de bloqueo se marcaría solo."""
+def _ip_aleatoria_libre(bd: Session, usuario_id: int) -> str:
+    """Sortea una IP que NO esté ya bloqueada en el firewall del PROPIO
+    usuario: si una sesión nueva reutilizara una IP que él dejó bloqueada,
+    el paso de bloqueo se marcaría solo."""
     for _ in range(30):
         ip = _ip_aleatoria()
-        if not bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip).first():
+        if not bd.query(IpBloqueada).filter(
+            IpBloqueada.usuario_id == usuario_id, IpBloqueada.direccion_ip == ip,
+        ).first():
             return ip
     return _ip_aleatoria()  # espacio casi agotado: caso teórico
 
@@ -208,18 +222,23 @@ def ips_maliciosas(sesion: SesionEjercicio) -> list:
 
 
 def _atacantes_bloqueados(bd: Session, sesion: SesionEjercicio) -> bool:
-    """True solo si TODAS las IPs maliciosas del escenario están bloqueadas."""
+    """True solo si TODAS las IPs maliciosas del escenario están bloqueadas
+    en el firewall del propio estudiante."""
     ips = ips_maliciosas(sesion)
     if not ips:
         return False
     for ip in ips:
-        if not bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip).first():
+        if not bd.query(IpBloqueada).filter(
+            IpBloqueada.usuario_id == sesion.usuario_id, IpBloqueada.direccion_ip == ip,
+        ).first():
             return False
     return True
 
 
-def _ip_atacante_bloqueada(bd: Session, ip: str) -> bool:
-    return bd.query(IpBloqueada).filter(IpBloqueada.direccion_ip == ip).first() is not None
+def _ip_atacante_bloqueada(bd: Session, usuario_id: int, ip: str) -> bool:
+    return bd.query(IpBloqueada).filter(
+        IpBloqueada.usuario_id == usuario_id, IpBloqueada.direccion_ip == ip,
+    ).first() is not None
 
 
 # ── Verificabilidad de items (validación al crear ejercicios) ─────
@@ -318,11 +337,44 @@ def obtener_sesion_activa(bd: Session, usuario_id: int) -> SesionEjercicio | Non
     ).first()
 
 
-def _leer_items(sesion: SesionEjercicio) -> dict:
+def _item_ok(valor) -> bool:
+    """items_estado guarda bool (sesiones antiguas) o un objeto
+    {"ok": bool, "cmd": str, "seg": int} (sesiones nuevas)."""
+    if isinstance(valor, dict):
+        return bool(valor.get("ok"))
+    return bool(valor)
+
+
+def _leer_items_raw(sesion: SesionEjercicio) -> dict:
+    """Estado crudo por ítem, preservando los metadatos (comando/segundo)."""
     try:
-        return {int(k): bool(v) for k, v in json.loads(sesion.items_estado or "{}").items()}
+        return {int(k): v for k, v in json.loads(sesion.items_estado or "{}").items()}
     except Exception:
         return {}
+
+
+def _leer_items(sesion: SesionEjercicio) -> dict:
+    return {k: _item_ok(v) for k, v in _leer_items_raw(sesion).items()}
+
+
+def _leer_pistas(sesion: SesionEjercicio) -> list:
+    try:
+        pistas = json.loads(sesion.pistas or "[]")
+        return pistas if isinstance(pistas, list) else []
+    except Exception:
+        return []
+
+
+def registrar_pista(bd: Session, sesion: SesionEjercicio, texto: str):
+    """Guarda el texto de la pista y el segundo en que se pidió, para que el
+    docente vea CUÁLES pistas recibió el estudiante (no solo el conteo)."""
+    pistas = _leer_pistas(sesion)
+    pistas.append({
+        "seg": max(0, int((_ahora() - _aware(sesion.fecha_inicio)).total_seconds())),
+        "texto": (texto or "")[:300],
+    })
+    sesion.pistas = json.dumps(pistas, ensure_ascii=False)
+    bd.commit()
 
 
 def _porcentaje(items: dict) -> int:
@@ -350,19 +402,20 @@ def crear_sesion(bd: Session, usuario_id: int, ejercicio: EjercicioDocente) -> S
         finalizar_sesion(bd, previa, "expirada")
 
     # Laboratorio limpio: un ejercicio = un incidente. Se eliminan los
-    # eventos/alertas del ejercicio anterior del propio usuario para que
-    # la investigación no se contamine con datos viejos.
+    # eventos/alertas y los BLOQUEOS del ejercicio anterior del propio
+    # usuario para que la investigación no se contamine con datos viejos.
     bd.query(Alerta).filter(Alerta.usuario_id == usuario_id).delete(synchronize_session=False)
     bd.query(Evento).filter(Evento.usuario_id == usuario_id).delete(synchronize_session=False)
+    bd.query(IpBloqueada).filter(IpBloqueada.usuario_id == usuario_id).delete(synchronize_session=False)
     bd.commit()
 
     # Niveles 6-7: escenario multi-vector con dos atacantes distintos
     multi = (ejercicio.nivel or 1) >= 6
-    ips = [_ip_aleatoria_libre(bd)]
+    ips = [_ip_aleatoria_libre(bd, usuario_id)]
     if multi:
-        ip2 = _ip_aleatoria_libre(bd)
+        ip2 = _ip_aleatoria_libre(bd, usuario_id)
         while ip2 == ips[0]:
-            ip2 = _ip_aleatoria_libre(bd)
+            ip2 = _ip_aleatoria_libre(bd, usuario_id)
         ips.append(ip2)
 
     items = {it.id: False for it in ejercicio.items}
@@ -402,9 +455,87 @@ def crear_sesion(bd: Session, usuario_id: int, ejercicio: EjercicioDocente) -> S
     return sesion
 
 
+def _construir_detalle(bd: Session, sesion: SesionEjercicio, estado: str,
+                       pct: int, penal: int, pct_final: int, tiempo_seg: int) -> str:
+    """Snapshot estructurado de la sesión para la entrega: lo que el docente
+    necesita para evaluar el PROCESO, no solo el porcentaje final."""
+    raw = _leer_items_raw(sesion)
+    items_db = bd.query(ItemEjercicioDocente).filter(
+        ItemEjercicioDocente.ejercicio_id == sesion.ejercicio_id
+    ).order_by(ItemEjercicioDocente.orden).all()
+    checklist = []
+    for it in items_db:
+        meta = raw.get(it.id)
+        es_dict = isinstance(meta, dict)
+        checklist.append({
+            "descripcion": it.descripcion,
+            "orden": it.orden,
+            "completado": _item_ok(meta),
+            "comando": meta.get("cmd") if es_dict else None,
+            "seg": meta.get("seg") if es_dict else None,
+        })
+
+    try:
+        fases = json.loads(sesion.fases or "[]")
+    except Exception:
+        fases = []
+    fase_max = max((f.get("orden", 0) for f in fases if f.get("estado") == "impactada"), default=0)
+
+    ejercicio = bd.query(EjercicioDocente).filter(EjercicioDocente.id == sesion.ejercicio_id).first()
+    if estado == "completada":
+        cierre = "completada"
+    elif ejercicio and ejercicio.tipo == "defensa" and fase_max >= len(fases or [1, 2, 3]):
+        # El ataque llegó a su última fase sin contención: intrusión sufrida
+        cierre = "intrusion"
+    else:
+        cierre = "expirada"
+
+    inicio = _aware(sesion.fecha_inicio)
+    fin = _aware(sesion.fecha_fin) or _ahora()
+    # El rango de fechas se filtra en Python: SQLite guarda datetimes naive
+    # y compararlos en SQL contra datetimes aware produce resultados vacíos
+    acciones = bd.query(AccionUsuario).filter(
+        AccionUsuario.usuario_id == sesion.usuario_id,
+    ).order_by(AccionUsuario.id.desc()).limit(500).all()
+    # Tolerancia de 2 s: fecha_creacion se trunca a segundos en SQLite y un
+    # comando del mismo segundo del inicio quedaría fuera del rango
+    margen = timedelta(seconds=2)
+    timeline = []
+    for a in reversed(acciones):
+        fecha = _aware(a.fecha_creacion)
+        if fecha is None or fecha < inicio - margen or fecha > fin + margen:
+            continue
+        timeline.append({
+            "seg": max(0, int((fecha - inicio).total_seconds())),
+            "cmd": (a.comando or "")[:120],
+            "ok": (a.resultado or "") != "ERROR",
+        })
+    timeline = timeline[:300]
+
+    return json.dumps({
+        "version": 1,
+        "cierre": cierre,
+        "porcentaje": pct,
+        "penalizacion": penal,
+        "porcentaje_final": pct_final,
+        "tiempo_seg": tiempo_seg,
+        "ayudas": sesion.ayudas or 0,
+        "nota_sugerida": round(1.0 + 6.0 * pct_final / 100.0, 1),
+        "fases": [{"orden": f.get("orden"), "en_seg": f.get("en_seg"), "estado": f.get("estado")} for f in fases],
+        "fase_max": fase_max,
+        "total_fases": len(fases),
+        "items": checklist,
+        "pistas": _leer_pistas(sesion),
+        "timeline": timeline,
+    }, ensure_ascii=False)
+
+
 def finalizar_sesion(bd: Session, sesion: SesionEjercicio, estado: str):
     """Cierra la sesión y genera/actualiza la entrega con datos calculados
     por el servidor (no por el cliente)."""
+    # Materializar fases pendientes antes de calcular el resultado, para que
+    # el reporte sea correcto aunque el alumno no haya polleado activamente.
+    materializar_fases(bd, sesion)
     items = _leer_items(sesion)
     pct = _porcentaje(items)
     # Penalización real por ayudas: -5% por pista, tope -30%
@@ -422,16 +553,26 @@ def finalizar_sesion(bd: Session, sesion: SesionEjercicio, estado: str):
     else:
         respuesta = f"{base}. Resultado: {pct_final}%. Tiempo: {t_legible}. Sin ayudas."
 
+    detalle = _construir_detalle(bd, sesion, estado, pct, penal, pct_final, tiempo_seg)
+
     entrega = bd.query(EntregaEjercicioDocente).filter(
         EntregaEjercicioDocente.ejercicio_id == sesion.ejercicio_id,
         EntregaEjercicioDocente.usuario_id == sesion.usuario_id,
     ).first()
     if entrega:
-        # No sobrescribir una entrega ya evaluada por el docente
-        if entrega.estado != "evaluado":
+        # No sobrescribir una entrega ya evaluada, salvo que el docente haya
+        # habilitado un reintento: en ese caso esta rendición la reemplaza y
+        # la evaluación anterior se borra para volver a calificar.
+        if entrega.estado != "evaluado" or entrega.reintento_habilitado:
             entrega.respuesta = respuesta
             entrega.estado = "entregado"
             entrega.ayudas_pedidas = sesion.ayudas
+            entrega.detalle = detalle
+            if entrega.reintento_habilitado:
+                entrega.nota = None
+                entrega.comentarios_docente = None
+                entrega.fecha_evaluacion = None
+                entrega.reintento_habilitado = False
     else:
         bd.add(EntregaEjercicioDocente(
             ejercicio_id=sesion.ejercicio_id,
@@ -439,6 +580,7 @@ def finalizar_sesion(bd: Session, sesion: SesionEjercicio, estado: str):
             respuesta=respuesta,
             estado="entregado",
             ayudas_pedidas=sesion.ayudas,
+            detalle=detalle,
         ))
     bd.commit()
 
@@ -605,7 +747,7 @@ def evaluar_comando_en_sesion(bd: Session, usuario_id: int, comando: str, salida
     # Ataque en tiempo real: disparar las fases cuyo tiempo ya pasó
     materializar_fases(bd, sesion)
 
-    items_estado = _leer_items(sesion)
+    items_raw = _leer_items_raw(sesion)
     items_db = bd.query(ItemEjercicioDocente).filter(
         ItemEjercicioDocente.ejercicio_id == sesion.ejercicio_id
     ).all()
@@ -614,7 +756,7 @@ def evaluar_comando_en_sesion(bd: Session, usuario_id: int, comando: str, salida
     # cada paso del ejercicio exige una acción distinta del estudiante.
     cambio = False
     for it in sorted(items_db, key=lambda x: (x.orden or 0, x.id)):
-        if items_estado.get(it.id):
+        if _item_ok(items_raw.get(it.id)):
             continue
         if not item_cumplido(it.descripcion, comando, salida):
             continue
@@ -631,14 +773,26 @@ def evaluar_comando_en_sesion(bd: Session, usuario_id: int, comando: str, salida
                 # por objetivo: el comando debe apuntar a alguna IP maliciosa
                 if not any(ip in (comando or "") for ip in ips_mal):
                     continue
-        items_estado[it.id] = True
+        # Documentar requiere investigación previa: el ítem de reporte solo se
+        # marca si ya hay al menos otro ítem cumplido. Así `report` como primer
+        # comando no completa el paso sin haber hecho nada.
+        if _es_item_documentacion(it.descripcion):
+            otros_cumplidos = sum(1 for k, v in items_raw.items() if k != it.id and _item_ok(v))
+            if otros_cumplidos < 1:
+                continue
+        # Se guarda QUÉ comando lo marcó y CUÁNDO, para el detalle del docente
+        items_raw[it.id] = {
+            "ok": True,
+            "cmd": (comando or "").strip()[:120],
+            "seg": max(0, int((_ahora() - _aware(sesion.fecha_inicio)).total_seconds())),
+        }
         cambio = True
         break
 
     if cambio:
-        sesion.items_estado = json.dumps({str(k): v for k, v in items_estado.items()})
+        sesion.items_estado = json.dumps({str(k): v for k, v in items_raw.items()})
         bd.commit()
-        if items_estado and all(items_estado.values()):
+        if items_raw and all(_item_ok(v) for v in items_raw.values()):
             finalizar_sesion(bd, sesion, "completada")
 
     return sesion_a_dict(bd, sesion)

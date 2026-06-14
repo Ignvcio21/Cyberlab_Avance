@@ -68,7 +68,7 @@ export default function PerfilPage() {
           // El nombre de usuario cambió → el JWT queda inválido → forzar re-login
           setMsgPerfil({ texto: "Nombre de usuario actualizado. Debes iniciar sesión nuevamente.", tipo: "ok" })
           setTimeout(() => {
-            ["nombre_usuario","nombre_display","rol_usuario","token"].forEach(k => localStorage.removeItem(k))
+            ["nombre_usuario","nombre_display","rol_usuario","token"].forEach(k => sessionStorage.removeItem(k))
             router.push("/")
           }, 2000)
         } else {
@@ -261,10 +261,10 @@ export default function PerfilPage() {
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#f0f6fc", marginBottom: 18 }}>Mi actividad</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
                     {[
-                      { lbl: "Ejercicios intentados", val: perfil?.stats?.intentos_total ?? 0, color: "#2997ff" },
-                      { lbl: "Evaluados", val: perfil?.stats?.intentos_evaluados ?? 0, color: "#30d158" },
+                      { lbl: "Ejercicios entregados", val: perfil?.stats?.entregas_total ?? 0, color: "#2997ff" },
+                      { lbl: "Evaluados", val: perfil?.stats?.entregas_evaluadas ?? 0, color: "#30d158" },
                       { lbl: "Nota promedio", val: perfil?.stats?.nota_promedio ?? "—", color: "#f59e0b" },
-                      { lbl: "Entregas docente", val: perfil?.stats?.entregas_docente ?? 0, color: "#5e5ce6" },
+                      { lbl: "Aprobados (≥4)", val: perfil?.stats?.entregas_aprobadas ?? 0, color: "#5e5ce6" },
                     ].map(({ lbl: l, val, color }) => (
                       <div key={l} style={{ background: "#0d1117", border: "1px solid #21262d", borderRadius: 12, padding: "16px 18px", borderTop: `2px solid ${color}` }}>
                         <div style={{ fontSize: 26, fontWeight: 900, color }}>{val}</div>
@@ -282,7 +282,7 @@ export default function PerfilPage() {
                   </div>
                   <button
                     onClick={() => {
-                      ["nombre_usuario","nombre_display","rol_usuario","token"].forEach(k => localStorage.removeItem(k))
+                      ["nombre_usuario","nombre_display","rol_usuario","token"].forEach(k => sessionStorage.removeItem(k))
                       router.push("/")
                     }}
                     style={{ ...btn, background: "rgba(255,69,58,.1)", color: "#ff453a", border: "1px solid rgba(255,69,58,.25)" }}

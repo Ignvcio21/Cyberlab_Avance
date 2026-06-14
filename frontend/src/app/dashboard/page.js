@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import BarraSuperior from "../componentes/BarraSuperior"
+import FeedbackCierre from "../componentes/FeedbackCierre"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
@@ -64,11 +65,38 @@ export default function Dashboard() {
   const finalizadaRef = useRef(false)
   const fasesPrevRef  = useRef([])  // fases del ataque ya anunciadas
 
+  // ── Feedback automático de cierre (orientación para el estudiante) ──
+  const [feedback,        setFeedback]        = useState(null)   // { texto, fuente }
+  const [feedbackCargando, setFeedbackCargando] = useState(false)
+
+  const cargarFeedback = async (ejId) => {
+    if (!ejId) return
+    setFeedback(null); setFeedbackCargando(true)
+    try {
+      const r = await fetch(`${API_URL}/ejercicios-docente/${ejId}/mi-feedback`, { headers: getAuthHeaders() })
+      if (r.ok) setFeedback(await r.json())
+    } catch {}
+    finally { setFeedbackCargando(false) }
+  }
+
   // ── Derivados de la sesión ──
   const sesionItems   = sesion?.items || []
   const pctDocente    = sesion?.porcentaje ?? 0
   const ayudasDocente = sesion?.ayudas ?? 0
   const sesionActiva  = sesion?.estado === "activa"
+
+  // Layout responsivo: escenario + terminal lado a lado (50/50) en pantallas anchas; apilado en chicas
+  const [anchoVentana, setAnchoVentana] = useState(1400)
+  const [altoVentana, setAltoVentana]   = useState(900)
+  useEffect(() => {
+    const fn = () => { setAnchoVentana(window.innerWidth); setAltoVentana(window.innerHeight) }
+    fn()
+    window.addEventListener("resize", fn)
+    return () => window.removeEventListener("resize", fn)
+  }, [])
+  const ladoALado = !!(ejDocenteActivo && sesionActiva && anchoVentana > 980)
+  // Alto máximo de cada columna: que ambas quepan en pantalla con scroll interno
+  const altoPanel = Math.max(440, altoVentana - 180)
 
   const porNivel = useMemo(() => {
     const m = {}
@@ -171,6 +199,7 @@ export default function Dashboard() {
       setTimerDocente(0)
       setPopupFinPct(s.porcentaje_final ?? s.porcentaje ?? 0)
       setPopupFin(true)
+      cargarFeedback(s.ejercicio_id)
       if (s.ejercicio_id) setEntregados(prev => new Set([...prev, s.ejercicio_id]))
       const lineas = [
         "────────────────────────────────────────────",
@@ -187,6 +216,8 @@ export default function Dashboard() {
 
   // ── Iniciar ejercicio (el backend crea la sesión) ──────────────
   const iniciarEjDocente = async (ej) => {
+    // Guarda: si este ejercicio ya está activo, no reiniciar (evita reset del temporizador)
+    if (sesionActiva && ejDocenteActivo?.id === ej.id) return
     try {
       const r = await fetch(`${API_URL}/ejercicios-docente/${ej.id}/iniciar`, {
         method: "POST", headers: getAuthHeaders(),
@@ -196,6 +227,7 @@ export default function Dashboard() {
       finalizadaRef.current = false
       fasesPrevRef.current = []
       setEjDocenteActivo(ej)
+      setFeedback(null)
       setPistaDocente(""); setMostrarPista(false)
       aplicarSesion(d.sesion)
       setHistorial([
@@ -442,7 +474,7 @@ export default function Dashboard() {
                     const activo    = ejDocenteActivo?.id === ej.id && sesionActiva
                     const entregado = entregados.has(ej.id)
                     return (
-                      <button key={ej.id} onClick={() => setConfirmEjDocente(ej)} style={{
+                      <button key={ej.id} onClick={() => { if (!activo) setConfirmEjDocente(ej) }} style={{
                         textAlign:"left", padding:"11px 14px", borderRadius:10, width:"100%",
                         border: activo ? "1.5px solid #2997ff" : entregado ? "1px solid rgba(0,218,243,0.30)" : "1px solid #2c2c2e",
                         background: activo ? "rgba(41,151,255,0.12)" : entregado ? "rgba(0,218,243,0.07)" : "#242426",
@@ -467,9 +499,12 @@ export default function Dashboard() {
         </div>
 
 
-        {/* ── EJERCICIO ACTIVO: escenario + checklist ── */}
+        {/* ── ESCENARIO + TERMINAL lado a lado (mitad y mitad cuando hay ejercicio activo) ── */}
+        <div style={ladoALado ? { display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, alignItems:"stretch" } : undefined}>
+
+        {/* Escenario + checklist */}
         {ejDocenteActivo && sesionActiva && (
-          <section className="mission-panel">
+          <section className="mission-panel" style={ladoALado ? { maxHeight: altoPanel, overflowY: "auto" } : undefined}>
             <div className="panel-header">
               <h2 style={{ margin:0 }}>{ejDocenteActivo.titulo}</h2>
               <div style={{ display:"flex", gap:8, alignItems:"center" }}>
@@ -495,7 +530,7 @@ export default function Dashboard() {
             </div>
             <div style={{
               display:"grid",
-              gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",
+              gridTemplateColumns: ladoALado ? "1fr" : "repeat(auto-fit, minmax(200px, 1fr))",
               gap:10, marginTop:16
             }}>
               {sesionItems.map((it, idx) => {
@@ -558,7 +593,7 @@ export default function Dashboard() {
         )}
 
         {/* Terminal */}
-        <section style={{ background:"#0d1117", border:"1px solid rgba(57,211,83,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)" }}>
+        <section style={{ background:"#0d1117", border:"1px solid rgba(57,211,83,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)", display: ladoALado ? "flex" : undefined, flexDirection: ladoALado ? "column" : undefined }}>
           {/* Chrome bar */}
           <div style={{ background:"#161b22", padding:"11px 16px", display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
             <div style={{ display:"flex", gap:6 }}>
@@ -573,7 +608,7 @@ export default function Dashboard() {
               ● LIVE
             </div>
           </div>
-          <div className="terminal-window" ref={termRef} style={{ borderRadius:0, borderLeft:"none", borderRight:"none", borderTop:"none" }}>
+          <div className="terminal-window" ref={termRef} style={{ borderRadius:0, borderLeft:"none", borderRight:"none", borderTop:"none", flex: ladoALado ? 1 : undefined, height: ladoALado ? "auto" : undefined, maxHeight: ladoALado ? "none" : undefined, minHeight: ladoALado ? 0 : undefined }}>
             {historial.map((l, i) => (
               <div key={i} className={`terminal-line ${l.startsWith("cyberlab@kali") ? "terminal-cmd" : ""}`}>
                 {l}
@@ -608,6 +643,8 @@ export default function Dashboard() {
               style={{ color:"#c9d1d9", caretColor:"#39d353" }}/>
           </form>
         </section>
+
+        </div>
 
         {/* ── Modal confirmación ejercicio docente ── */}
         {confirmEjDocente && (() => {
@@ -705,6 +742,10 @@ export default function Dashboard() {
                 }
                 <br/><span style={{ fontSize:12, color:"#6e6e73" }}>Podrás ver tu nota en la sección <em>Notas</em>.</span>
               </p>
+
+              {/* Orientación automática de cierre (para el estudiante) */}
+              <FeedbackCierre cargando={feedbackCargando} feedback={feedback} items={sesion?.items || []} />
+
               <button
                 onClick={() => { setPopupFin(false); setEjDocenteActivo(null); setSesion(null) }}
                 style={{

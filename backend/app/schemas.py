@@ -263,6 +263,11 @@ class SolicitudEvaluarEntrega(BaseModel):
     comentarios: Optional[str] = None
 
 
+class SolicitudGuardarContenido(BaseModel):
+    """Contenido markdown de una sección teórica editada desde el panel."""
+    contenido: str
+
+
 class EntregaSalida(BaseModel):
     id: int
     ejercicio_id: int
@@ -294,20 +299,6 @@ class SolicitudCambiarContrasenaPerfil(BaseModel):
         if len(v) < 8:
             raise ValueError("La contraseña debe tener al menos 8 caracteres")
         return v
-
-
-# ── Anuncios docente ──────────────────────────────────────────────
-
-class SolicitudCrearAnuncio(BaseModel):
-    titulo: str
-    mensaje: str
-    tipo: str = "aviso"  # urgente | aviso | info
-
-
-class SolicitudEditarAnuncio(BaseModel):
-    titulo: str
-    mensaje: str
-    tipo: str
 
 
 # ── Recuperación de contraseña ────────────────────────────────────

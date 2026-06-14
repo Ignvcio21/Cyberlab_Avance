@@ -4,6 +4,8 @@ import { useEffect, useState, useMemo, useRef } from "react"
 import { useRouter } from "next/navigation"
 import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
+import ModalEntrega, { BadgeCierre, BarraResultado, fmtDur } from "../componentes/ModalEntrega"
+import EditorContenido from "../componentes/EditorContenido"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
@@ -92,6 +94,13 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
     return (todasLasNotas.reduce((s, n) => s + n, 0) / todasLasNotas.length).toFixed(1)
   })()
 
+  // Mini-stats del alumno: resultado medio de sus entregas y pendientes de evaluar
+  const resultadosFinales = entregas.map(en => en.resumen?.porcentaje_final).filter(v => v != null)
+  const resultadoMedio = resultadosFinales.length
+    ? Math.round(resultadosFinales.reduce((s, v) => s + v, 0) / resultadosFinales.length)
+    : null
+  const sinEvaluar = entregas.filter(en => en.estado !== "evaluado").length
+
   return (
     <div className="panel-body">
       <div className="perfil-detalle-header">
@@ -102,15 +111,36 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
             {entregas.length} entregas · {intentos.length} intentos terminal · 7 niveles
           </div>
         </div>
-        {/* Nota general del alumno */}
+        {/* Nota general + mini-stats del alumno */}
         {notaGeneral !== null && (
-          <div style={{ textAlign:"center", marginRight:12 }}>
+          <div style={{ textAlign:"center", marginRight:4 }}>
             <div style={{
               fontSize:28, fontWeight:900, fontFamily:"var(--mono)",
               color: notaGeneral >= 4 ? "var(--terciario-dim)" : "#ffb4ab",
               lineHeight:1
             }}>{notaGeneral}</div>
             <div style={{ fontSize:10, color:"var(--texto-apagado)", marginTop:2 }}>nota general</div>
+          </div>
+        )}
+        {resultadoMedio !== null && (
+          <div style={{
+            textAlign:"center", padding:"7px 14px", marginRight:4,
+            background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:10,
+          }}>
+            <div style={{
+              fontSize:14, fontWeight:900, fontFamily:"var(--mono)", lineHeight:1.2,
+              color: resultadoMedio >= 70 ? "#30d158" : resultadoMedio >= 40 ? "#f59e0b" : "#ff7a6e",
+            }}>{resultadoMedio}%</div>
+            <div style={{ fontSize:9, color:"var(--texto-apagado)", textTransform:"uppercase", letterSpacing:"0.05em" }}>result. medio</div>
+          </div>
+        )}
+        {sinEvaluar > 0 && (
+          <div style={{
+            textAlign:"center", padding:"7px 14px", marginRight:8,
+            background:"rgba(255,200,0,0.07)", border:"1px solid rgba(255,200,0,0.22)", borderRadius:10,
+          }}>
+            <div style={{ fontSize:14, fontWeight:900, fontFamily:"var(--mono)", color:"#ffc107", lineHeight:1.2 }}>{sinEvaluar}</div>
+            <div style={{ fontSize:9, color:"var(--texto-apagado)", textTransform:"uppercase", letterSpacing:"0.05em" }}>sin evaluar</div>
           </div>
         )}
         <button
@@ -170,8 +200,25 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
                   <div style={{ color: vacio ? "var(--texto-apagado)" : "#fff", fontWeight:700, fontSize:14 }}>
                     Nivel {n} — {NOMBRES_NIVELES_PANEL[n] || ""}
                   </div>
-                  <div style={{ color:"var(--texto-apagado)", fontSize:11, fontFamily:"var(--mono)", marginTop:2 }}>
+                  <div style={{
+                    color:"var(--texto-apagado)", fontSize:11, fontFamily:"var(--mono)", marginTop:2,
+                    display:"flex", gap:8, alignItems:"center", flexWrap:"wrap",
+                  }}>
                     {vacio ? "Sin entregas" : `${total} entrega${total !== 1 ? "s" : ""}${eval_ > 0 ? ` · ${eval_} evaluados` : ""}`}
+                    {/* La cabecera adelanta el estado del nivel sin abrirlo */}
+                    {listEnt.length === 1 && listEnt[0].resumen?.cierre && (
+                      <BadgeCierre cierre={listEnt[0].resumen.cierre} />
+                    )}
+                    {listEnt.some(en => en.estado !== "evaluado") && (
+                      <span style={{
+                        fontSize:9.5, fontWeight:800, color:"#ffc107", letterSpacing:"0.05em",
+                        background:"rgba(255,200,0,0.10)", border:"1px solid rgba(255,200,0,0.25)",
+                        borderRadius:5, padding:"2px 8px",
+                      }}>SIN EVALUAR</span>
+                    )}
+                    {listEnt.length === 1 && listEnt[0].nota != null && (
+                      <span style={{ color:"var(--terciario-dim)", fontWeight:800 }}>nota {listEnt[0].nota}</span>
+                    )}
                   </div>
                 </div>
 
@@ -184,51 +231,77 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
               {abierto && (
                 <div style={{ padding:"12px 16px", display:"flex", flexDirection:"column", gap:8 }}>
 
-                  {/* Entregas de ejercicios docente */}
+                  {/* Entregas de ejercicios docente — card de desempeño */}
                   {ordenar(listEnt, "fecha_entrega").map(en => (
                     <div key={`ent-${en.id}`}
-                      className={`intento-card ${en.nota != null && en.nota >= 4 ? "intento-aprobado" : ""}`}
+                      onClick={() => onEvaluarEntrega(en)}
+                      style={{
+                        background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)",
+                        borderRadius:12, padding:"13px 16px", cursor:"pointer",
+                        display:"grid", gridTemplateColumns:"1.4fr 1.6fr 0.8fr auto",
+                        gap:14, alignItems:"center", transition:"border .15s",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.border = "1px solid rgba(41,151,255,0.40)"}
+                      onMouseLeave={e => e.currentTarget.style.border = "1px solid rgba(255,255,255,0.08)"}
                     >
-                      <div className="intento-top">
-                        <div className="intento-ej">
-                          <span className="intento-ej-id">
-                            {en.numero_ejercicio ? `#${en.numero_ejercicio} · ` : ""}{en.titulo_ejercicio || `Ejercicio #${en.ejercicio_id}`}
-                          </span>
-                          <span className="intento-ej-desc">{en.descripcion_ejercicio || "—"}</span>
-                          <span style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:2, display:"block" }}>
-                            🕐 {formatFecha(en.fecha_entrega)}
-                          </span>
-                        </div>
-                        <div className="intento-badges">
-                          <span className={`intento-estado ${en.estado === "evaluado" ? "est-verde" : "est-gris"}`}>
-                            {en.estado}
-                          </span>
-                          {en.nota != null && (
+                      {/* Ejercicio + cierre */}
+                      <div style={{ display:"flex", flexDirection:"column", gap:5, minWidth:0 }}>
+                        <div style={{ fontSize:13, fontWeight:700, color:"#fff", display:"flex", gap:7, alignItems:"center", flexWrap:"wrap" }}>
+                          {en.numero_ejercicio ? `#${en.numero_ejercicio} · ` : ""}{en.titulo_ejercicio || `Ejercicio #${en.ejercicio_id}`}
+                          {en.tipo && (
                             <span style={{
-                              fontSize:14, fontWeight:900,
-                              color: en.nota >= 4 ? "var(--terciario-dim)" : "#ffb4ab",
-                              background: en.nota >= 4 ? "rgba(0,218,243,0.10)" : "rgba(255,180,171,0.10)",
-                              border:`1px solid ${en.nota >= 4 ? "rgba(0,218,243,0.25)" : "rgba(255,180,171,0.25)"}`,
-                              padding:"3px 10px", borderRadius:6, fontFamily:"var(--mono)"
-                            }}>
-                              Nota: {en.nota}
-                            </span>
+                              fontFamily:"var(--mono)", fontSize:9.5, fontWeight:800, letterSpacing:"0.05em",
+                              padding:"2px 8px", borderRadius:5, textTransform:"uppercase",
+                              ...(en.tipo === "defensa"
+                                ? { background:"rgba(0,218,243,0.10)", color:"var(--terciario)", border:"1px solid rgba(0,218,243,0.25)" }
+                                : { background:"rgba(255,69,58,0.10)", color:"#ff7a6e", border:"1px solid rgba(255,69,58,0.25)" }),
+                            }}>{en.tipo}</span>
                           )}
                         </div>
+                        <div><BadgeCierre cierre={en.resumen?.cierre} /></div>
+                        <span style={{ fontSize:10.5, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>
+                          🕐 {formatFecha(en.fecha_entrega)}
+                        </span>
                       </div>
-                      {(en.ayudas_pedidas || 0) > 0 && (
-                        <div className="intento-meta">
-                          <span className="intento-ayuda">💡 {en.ayudas_pedidas} ayudas</span>
-                        </div>
-                      )}
-                      {en.comentarios_docente && (
-                        <div style={{ fontSize:12, color:"var(--texto-apagado)", fontStyle:"italic", marginTop:4 }}>
-                          "{en.comentarios_docente}"
-                        </div>
-                      )}
-                      <button className="btn-evaluar" onClick={() => onEvaluarEntrega(en)} disabled={cargando}>
-                        {en.nota != null ? "✏ Editar evaluación" : "📋 Evaluar"}
-                      </button>
+
+                      {/* Resultado con penalización visible */}
+                      <BarraResultado resumen={en.resumen} />
+
+                      {/* Proceso */}
+                      <div style={{ display:"flex", flexDirection:"column", gap:4, fontFamily:"var(--mono)", fontSize:11, color:"var(--texto-secundario)" }}>
+                        <span>⏱ {fmtDur(en.resumen?.tiempo_seg)}</span>
+                        {(en.resumen?.ayudas ?? en.ayudas_pedidas ?? 0) > 0 && (
+                          <span style={{ color:"#f59e0b" }}>💡 {en.resumen?.ayudas ?? en.ayudas_pedidas} pista{(en.resumen?.ayudas ?? en.ayudas_pedidas) > 1 ? "s" : ""}</span>
+                        )}
+                        {en.resumen?.total_fases != null && en.resumen?.total_fases > 0 && (
+                          <span style={{ color:"var(--texto-apagado)" }}>
+                            fase máx: {en.resumen?.fase_max ?? 0}/{en.resumen?.total_fases}{(en.resumen?.fase_max ?? 0) >= en.resumen?.total_fases ? " 💥" : ""}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Nota + acción */}
+                      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:6 }}>
+                        {en.nota != null ? (
+                          <span style={{
+                            fontSize:16, fontWeight:900, fontFamily:"var(--mono)",
+                            color: en.nota >= 4 ? "var(--terciario-dim)" : "#ffb4ab",
+                          }}>{en.nota}</span>
+                        ) : (
+                          <span style={{
+                            fontSize:11, fontWeight:800, color:"#ffc107",
+                            background:"rgba(255,200,0,0.10)", border:"1px solid rgba(255,200,0,0.25)",
+                            borderRadius:6, padding:"3px 9px",
+                          }}>Pendiente</span>
+                        )}
+                        <button
+                          className="btn-evaluar"
+                          onClick={e => { e.stopPropagation(); onEvaluarEntrega(en) }}
+                          disabled={cargando}
+                        >
+                          {en.nota != null ? "✏ Editar" : "📋 Evaluar"}
+                        </button>
+                      </div>
                     </div>
                   ))}
 
@@ -332,6 +405,8 @@ export default function PanelDocente() {
   const [iaNumPuntos,         setIaNumPuntos]         = useState(4)
   const [cargandoIa,          setCargandoIa]          = useState(false)
   const [modalEntrega,        setModalEntrega]        = useState(null)
+  // Modal de detalle/evaluación compartido (perfil de estudiante)
+  const [detalleEntregaId,    setDetalleEntregaId]    = useState(null)
   const [notaEntrega,         setNotaEntrega]         = useState("")
   const [comentariosEntrega,  setComentariosEntrega]  = useState("")
   const creandoRef = useRef(false)  // evita doble creación de ejercicio
@@ -747,6 +822,7 @@ export default function PanelDocente() {
             {[
               { id:"estudiantes", label:"👤 Estudiantes", onClick: () => { setTab("estudiantes"); setPerfilActivo(null) } },
               { id:"ejercicios",  label:"📝 Ejercicios",  onClick: () => { setTab("ejercicios"); setVistaEjercicios("lista"); setEjSeleccionado(null); setMensaje("") } },
+              { id:"contenido",   label:"📄 Contenido",   onClick: () => { setTab("contenido"); setMensaje("") } },
               ...(esAdmin ? [{ id:"usuarios", label:"⚙ Usuarios", onClick: () => setTab("usuarios") }] : []),
             ].map(t => (
               <button
@@ -850,7 +926,7 @@ export default function PanelDocente() {
           {/* ── TAB: Detalle de perfil — vista por niveles ── */}
           {tab === "estudiantes" && perfilActivo && (
             <PanelPerfilNiveles
-              nombreEstudiante={perfilesEstudiantes.find(p => (p.nombreUsuario || p.correo || p.nombre) === perfilActivo)?.correo || perfilActivo}
+              nombreEstudiante={perfilesEstudiantes.find(p => (p.nombreUsuario || p.correo || p.nombre) === perfilActivo)?.nombre || perfilActivo}
               intentos={intentosPerfil}
               entregas={entregasPerfil}
               cargando={cargando}
@@ -858,12 +934,16 @@ export default function PanelDocente() {
               setOrdenDesc={setOrdenDesc}
               onVolver={() => { setPerfilActivo(null); setEntregasPerfil([]) }}
               onEvaluar={abrirEval}
-              onEvaluarEntrega={(en) => {
-                setModalEntrega(en)
-                setNotaEntrega(en.nota != null ? String(en.nota) : "")
-                setComentariosEntrega(en.comentarios_docente || "")
-                setMensaje("")
-              }}
+              onEvaluarEntrega={(en) => setDetalleEntregaId(en.id)}
+            />
+          )}
+
+          {/* Modal de detalle/evaluación de entrega (compartido con Estadísticas) */}
+          {detalleEntregaId != null && (
+            <ModalEntrega
+              entregaId={detalleEntregaId}
+              onCerrar={() => setDetalleEntregaId(null)}
+              onEvaluada={() => { if (perfilActivo) cargarEntregasPerfil(perfilActivo) }}
             />
           )}
 
@@ -1242,21 +1322,22 @@ export default function PanelDocente() {
                   )}
                   <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                     {entregasEj.map(en => (
-                      <div key={en.id} style={{
+                      <div key={en.id ?? "ne-" + en.usuario} style={{
                         background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)",
                         borderRadius:10, padding:"12px 16px",
                         display:"flex", alignItems:"center", gap:14,
+                        opacity: en.estado === "no_entregado" ? 0.7 : 1,
                       }}>
                         <div style={{ flex:1 }}>
                           <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
                             <strong style={{ color:"#fff" }}>{en.usuario}</strong>
                             <span style={{
                               fontSize:11, padding:"2px 8px", borderRadius:4, fontWeight:700,
-                              background: en.estado === "evaluado" ? "rgba(0,218,243,0.15)" : "rgba(255,200,0,0.12)",
-                              border: `1px solid ${en.estado === "evaluado" ? "rgba(0,218,243,0.30)" : "rgba(255,200,0,0.25)"}`,
-                              color: en.estado === "evaluado" ? "var(--terciario-dim)" : "#ffc107",
+                              background: en.estado === "evaluado" ? "rgba(0,218,243,0.15)" : en.estado === "no_entregado" ? "rgba(255,69,58,0.10)" : "rgba(255,200,0,0.12)",
+                              border: `1px solid ${en.estado === "evaluado" ? "rgba(0,218,243,0.30)" : en.estado === "no_entregado" ? "rgba(255,69,58,0.25)" : "rgba(255,200,0,0.25)"}`,
+                              color: en.estado === "evaluado" ? "var(--terciario-dim)" : en.estado === "no_entregado" ? "#ff6b6b" : "#ffc107",
                             }}>
-                              {en.estado === "evaluado" ? `Nota: ${en.nota}` : "Pendiente"}
+                              {en.estado === "evaluado" ? `Nota: ${en.nota}` : en.estado === "no_entregado" ? "No entregado" : "Pendiente"}
                             </span>
                           </div>
                           {(en.ayudas_pedidas || 0) > 0 && (
@@ -1270,17 +1351,19 @@ export default function PanelDocente() {
                             </div>
                           )}
                         </div>
-                        <button
-                          className="btn-evaluar"
-                          onClick={() => {
-                            setModalEntrega(en)
-                            setNotaEntrega(en.nota != null ? String(en.nota) : "")
-                            setComentariosEntrega(en.comentarios_docente || "")
-                            setMensaje("")
-                          }}
-                        >
-                          {en.estado === "evaluado" ? "✏ Editar nota" : "📋 Evaluar"}
-                        </button>
+                        {en.estado !== "no_entregado" && (
+                          <button
+                            className="btn-evaluar"
+                            onClick={() => {
+                              setModalEntrega(en)
+                              setNotaEntrega(en.nota != null ? String(en.nota) : "")
+                              setComentariosEntrega(en.comentarios_docente || "")
+                              setMensaje("")
+                            }}
+                          >
+                            {en.estado === "evaluado" ? "✏ Editar nota" : "📋 Evaluar"}
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1294,6 +1377,9 @@ export default function PanelDocente() {
               )}
             </div>
           )}
+
+          {/* ── TAB: Contenido informativo ── */}
+          {tab === "contenido" && <EditorContenido />}
 
           {/* ── TAB: Usuarios ── */}
           {tab === "usuarios" && esAdmin && (
@@ -1321,8 +1407,9 @@ export default function PanelDocente() {
                   Usuarios registrados
                   <span className="panel-section-count">{usuarios.length}</span>
                 </div>
+                <div style={{ overflowX: "auto" }}>
                 <table className="panel-tabla">
-                  <thead><tr><th>ID</th><th>Nombre</th><th>Correo</th><th>Rol</th><th></th></tr></thead>
+                  <thead><tr><th>ID</th><th>Nombre</th><th>Correo</th><th>Rol</th><th style={{ whiteSpace:"nowrap" }}></th></tr></thead>
                   <tbody>
                     {usuarios.map(u => (
                       <tr key={u.id}>
@@ -1349,34 +1436,40 @@ export default function PanelDocente() {
                             }}>{u.rol}</span>
                           )}
                         </td>
-                        <td style={{ whiteSpace:"nowrap", display:"flex", gap:4, alignItems:"center" }}>
-                          {editandoRolId === u.id ? (
-                            <>
-                              <button
-                                className="btn-evaluar"
-                                style={{ padding:"3px 10px", fontSize:11 }}
-                                onClick={() => setConfirmRolModal({ nombre: u.nombre_usuario, nuevoRol: rolEditValor })}
-                                disabled={cargando}
-                              >Guardar</button>
-                              <button
-                                className="boton-secundario"
-                                style={{ padding:"3px 10px", fontSize:11 }}
-                                onClick={() => setEditandoRolId(null)}
-                              >✕</button>
-                            </>
+                        <td style={{ whiteSpace:"nowrap" }}>
+                          {u.rol === "admin" ? (
+                            <span style={{ fontSize:11, color:"var(--texto-apagado)", fontStyle:"italic" }}>protegido</span>
                           ) : (
-                            <>
-                              <button
-                                className="boton-secundario"
-                                style={{ padding:"3px 10px", fontSize:11 }}
-                                onClick={() => { setEditandoRolId(u.id); setRolEditValor(u.rol) }}
-                              >Cambiar rol</button>
-                              <button
-                                style={{ padding:"3px 10px", fontSize:11, borderRadius:6, border:"1px solid rgba(255,69,58,0.35)", background:"rgba(255,69,58,0.10)", color:"#ff453a", cursor:"pointer", fontWeight:600 }}
-                                onClick={() => setConfirmEliminar(u.nombre_usuario)}
-                                disabled={cargando}
-                              >Eliminar</button>
-                            </>
+                            <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                            {editandoRolId === u.id ? (
+                              <>
+                                <button
+                                  className="btn-evaluar"
+                                  style={{ padding:"3px 10px", fontSize:11 }}
+                                  onClick={() => setConfirmRolModal({ nombre: u.nombre_usuario, nuevoRol: rolEditValor })}
+                                  disabled={cargando}
+                                >Guardar</button>
+                                <button
+                                  className="boton-secundario"
+                                  style={{ padding:"3px 10px", fontSize:11 }}
+                                  onClick={() => setEditandoRolId(null)}
+                                >✕</button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className="boton-secundario"
+                                  style={{ padding:"3px 10px", fontSize:11 }}
+                                  onClick={() => { setEditandoRolId(u.id); setRolEditValor(u.rol) }}
+                                >Cambiar rol</button>
+                                <button
+                                  style={{ padding:"3px 10px", fontSize:11, borderRadius:6, border:"1px solid rgba(255,69,58,0.35)", background:"rgba(255,69,58,0.10)", color:"#ff453a", cursor:"pointer", fontWeight:600, whiteSpace:"nowrap" }}
+                                  onClick={() => setConfirmEliminar(u.nombre_usuario)}
+                                  disabled={cargando}
+                                >Eliminar</button>
+                              </>
+                            )}
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -1386,6 +1479,7 @@ export default function PanelDocente() {
                     )}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
           )}

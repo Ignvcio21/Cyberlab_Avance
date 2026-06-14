@@ -224,10 +224,17 @@ export default function InformacionDashboard() {
   useEffect(() => {
     const cargar = async () => {
       setTextoActual("Cargando contenido...")
+      const carpeta = modo === "ataque" ? "ataque" : "defensa"
+      // 1) Override editado desde el panel (tiene prioridad sobre el .md)
       try {
-        // Ataque: /contenidos/informacion/nivel{N}/{seccion}.md
-        // Defensa: /contenidos/defensa/nivel{N}/{seccion}.md
-        const carpeta = modo === "ataque" ? "ataque" : "defensa"
+        const ro = await fetch(`${API_URL}/contenido-informativo/${carpeta}/${nivelLeccion}/${seccionLeccion}`, { headers: getAuthHeaders() })
+        if (ro.ok) {
+          const d = await ro.json()
+          if (d?.origen === "db" && d.contenido != null) { setTextoActual(d.contenido); return }
+        }
+      } catch { /* sin override: se usa el archivo estático */ }
+      try {
+        // Archivo estático original
         const ruta    = `/contenidos/${carpeta}/nivel${nivelLeccion}/${seccionLeccion}.md`
         const res     = await fetch(ruta, { cache: "no-store" })
         if (!res.ok) {

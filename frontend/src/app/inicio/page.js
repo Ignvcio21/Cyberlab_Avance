@@ -20,9 +20,6 @@ export default function InicioPlataforma() {
   const [rolUsuario, setRolUsuario] = useState("")
   const [progAtaque,  setProgAtaque]  = useState(vacioNiveles())
   const [progDefensa, setProgDefensa] = useState(vacioNiveles())
-  const [anuncios, setAnuncios] = useState([])
-  // Pop-up de anuncios no leídos al entrar (los vistos se recuerdan por usuario)
-  const [popupAnuncios, setPopupAnuncios] = useState(null)
   const [entregasPend, setEntregasPend] = useState([])
   const [statsDocente, setStatsDocente] = useState(null)
   const [statsAnimadas, setStatsAnimadas] = useState({ estudiantes: 0, pendientes: 0, notaPromedio: 0, ejercicios: 0 })
@@ -80,20 +77,6 @@ export default function InicioPlataforma() {
     const tok = sessionStorage.getItem("token") || ""
     if (tok) {
       const hdr = { "Authorization": `Bearer ${tok}` }
-      fetch(`${API_URL_INICIO}/anuncios`, { headers: hdr })
-        .then(r => r.json()).then(d => {
-          const lista = d.anuncios || []
-          setAnuncios(lista)
-          // Mostrar como pop-up los anuncios que el usuario aún no ha visto
-          if (lista.length && usuario) {
-            let vistos = []
-            try { vistos = JSON.parse(localStorage.getItem(`cyberlab_anuncios_vistos_${usuario}`) || "[]") } catch {}
-            const nuevos = lista.filter(a => !vistos.includes(a.id))
-            if (nuevos.length) {
-              setPopupAnuncios([...nuevos].sort(a => a.tipo === "urgente" ? -1 : 1))
-            }
-          }
-        }).catch(() => {})
       // Si es docente/admin, cargar datos del panel
       if (r === "admin" || r === "docente") {
         Promise.all([
@@ -189,7 +172,7 @@ export default function InicioPlataforma() {
                 {(rolUsuario === "admin"
                   ? [
                       { icon: "👥", titulo: "Gestión de usuarios", desc: "Crea, edita y elimina cuentas. Cambia roles y busca por nombre o correo.", ruta: "/panel", flecha: "Ir a usuarios →" },
-                      { icon: "📝", titulo: "Editor de contenido", desc: "Edita los módulos teóricos de cada nivel directamente desde el panel.", ruta: "/admin", flecha: "Editar contenido →" },
+                      { icon: "📝", titulo: "Editor de contenido", desc: "Edita los módulos teóricos de cada nivel directamente desde el panel.", ruta: "/panel", flecha: "Editar contenido →" },
                       { icon: "📋", titulo: "Logs de auditoría", desc: "Revisa todas las acciones de usuarios con filtros y exportación CSV.", ruta: "/estadisticas", flecha: "Ver logs →" },
                     ]
                   : [
@@ -211,7 +194,7 @@ export default function InicioPlataforma() {
               </div>
 
               {/* ── FILA INFERIOR ── */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
 
                 {/* Entregas pendientes */}
                 <div style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderRadius: 14, padding: 22 }}>
@@ -246,35 +229,6 @@ export default function InicioPlataforma() {
                     </>
                   )}
                 </div>
-
-                {/* Anuncios activos */}
-                <div style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderRadius: 14, padding: 22 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#f5f5f7" }}>Anuncios activos</div>
-                    <button onClick={() => router.push("/anuncios")} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 700, background: "linear-gradient(135deg,#2997ff,#5e5ce6)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>+ Nuevo</button>
-                  </div>
-                  {anuncios.length === 0 ? (
-                    <div style={{ fontSize: 13, color: "#6e6e73", textAlign: "center", padding: "20px 0" }}>Sin anuncios publicados</div>
-                  ) : (
-                    <>
-                      {anuncios.slice(0, 3).map((a, i) => {
-                        const colorDot = { urgente: "#ff453a", aviso: "#2997ff", info: "#ff9f0a" }
-                        return (
-                          <div key={a.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "11px 0", borderBottom: i < Math.min(anuncios.length, 3) - 1 ? "1px solid rgba(255,255,255,.06)" : "none" }}>
-                            <div style={{ width: 7, height: 7, borderRadius: "50%", background: colorDot[a.tipo] || "#2997ff", flexShrink: 0, marginTop: 5 }} />
-                            <div>
-                              <div style={{ fontSize: 13, fontWeight: 700, color: "#f5f5f7" }}>{a.titulo}</div>
-                              <div style={{ fontSize: 11, color: "#6e6e73", marginTop: 2 }}>{a.tipo} · {a.autor}</div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                      <div style={{ marginTop: 14, textAlign: "center" }}>
-                        <button onClick={() => router.push("/anuncios")} style={{ fontSize: 12, color: "#2997ff", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>Gestionar anuncios →</button>
-                      </div>
-                    </>
-                  )}
-                </div>
               </div>
             </section>
           </main>
@@ -288,95 +242,6 @@ export default function InicioPlataforma() {
       <TransicionPagina>
         <main style={{ minHeight: "100vh", background: "#141414" }}>
           <BarraSuperior paginaActiva="inicio" />
-
-          {/* ── ANUNCIOS ── */}
-          {anuncios.length > 0 && (() => {
-            const colorTipo = { urgente: "#ff453a", aviso: "#2997ff", info: "#ff9f0a" }
-            const urgentes = anuncios.filter(a => a.tipo === "urgente")
-            const resto = anuncios.filter(a => a.tipo !== "urgente")
-            return (
-              <div style={{ padding: "20px 32px 0" }}>
-                {urgentes.map(a => (
-                  <div key={a.id} style={{ background: "rgba(255,69,58,.07)", border: "1px solid rgba(255,69,58,.25)", borderLeft: "4px solid #ff453a", borderRadius: 12, padding: "14px 18px", marginBottom: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                      <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff453a", animation: "pulse-dot 1.5s infinite" }} />
-                      <span style={{ fontSize: 11, fontWeight: 700, color: "#ff453a", textTransform: "uppercase", letterSpacing: ".06em" }}>Urgente</span>
-                      <span style={{ fontSize: 11, color: "#6e7681" }}>· {a.autor}</span>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#f5f5f7" }}>{a.titulo}</div>
-                    <div style={{ fontSize: 13, color: "#aeaeb2", marginTop: 4, lineHeight: 1.5 }}>{a.mensaje}</div>
-                  </div>
-                ))}
-                {resto.length > 0 && (
-                  <div style={{ background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 12, overflow: "hidden", marginBottom: 10 }}>
-                    {resto.map((a, i) => (
-                      <div key={a.id} onClick={() => setPopupAnuncios([a])} title="Ver anuncio completo"
-                        style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 16px", cursor: "pointer", borderBottom: i < resto.length - 1 ? "1px solid rgba(255,255,255,.06)" : "none" }}>
-                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: colorTipo[a.tipo] || "#2997ff", flexShrink: 0, marginTop: 5 }} />
-                        <div style={{ flex: 1 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700, color: "#f5f5f7" }}>{a.titulo}</span>
-                          <span style={{ fontSize: 11, color: "#6e7681", marginLeft: 8 }}>· {a.autor}</span>
-                          <div style={{ fontSize: 12, color: "#aeaeb2", marginTop: 3, lineHeight: 1.5 }}>{a.mensaje}</div>
-                        </div>
-                        <span style={{ fontSize: 11, color: "#2997ff", flexShrink: 0, marginTop: 3 }}>Ver →</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <style>{`@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.3}}`}</style>
-              </div>
-            )
-          })()}
-
-          {/* ── POP-UP: anuncios del profesor ── */}
-          {popupAnuncios && popupAnuncios.length > 0 && (() => {
-            const colorTipo = { urgente: "#ff453a", aviso: "#2997ff", info: "#ff9f0a" }
-            const cerrar = () => {
-              // Marcar como vistos todos los anuncios actuales de este usuario
-              const usuario = sessionStorage.getItem("nombre_usuario") || ""
-              if (usuario) {
-                try {
-                  const vistos = JSON.parse(localStorage.getItem(`cyberlab_anuncios_vistos_${usuario}`) || "[]")
-                  const nuevos = [...new Set([...vistos, ...anuncios.map(a => a.id), ...popupAnuncios.map(a => a.id)])]
-                  localStorage.setItem(`cyberlab_anuncios_vistos_${usuario}`, JSON.stringify(nuevos))
-                } catch {}
-              }
-              setPopupAnuncios(null)
-            }
-            return (
-              <div onClick={cerrar} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 20 }}>
-                <div onClick={e => e.stopPropagation()} style={{ background: "#1c1c1e", border: "1px solid rgba(41,151,255,.30)", borderRadius: 20, padding: "28px 30px", maxWidth: 520, width: "100%", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.6)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-                    <span style={{ fontSize: 26 }}>📣</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: "#f5f5f7" }}>
-                        {popupAnuncios.length === 1 ? "Aviso del profesor" : `Tienes ${popupAnuncios.length} avisos del profesor`}
-                      </div>
-                      <div style={{ fontSize: 12, color: "#8e8e93" }}>Publicado en CyberLab</div>
-                    </div>
-                    <button onClick={cerrar} style={{ background: "none", border: "none", color: "#8e8e93", fontSize: 18, cursor: "pointer" }}>✕</button>
-                  </div>
-                  <div style={{ display: "grid", gap: 12 }}>
-                    {popupAnuncios.map(a => (
-                      <div key={a.id} style={{ background: "rgba(255,255,255,.03)", border: `1px solid ${colorTipo[a.tipo] || "#2997ff"}44`, borderLeft: `4px solid ${colorTipo[a.tipo] || "#2997ff"}`, borderRadius: 12, padding: "14px 16px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ fontSize: 10, fontWeight: 800, color: colorTipo[a.tipo] || "#2997ff", textTransform: "uppercase", letterSpacing: ".07em" }}>
-                            {a.tipo === "urgente" ? "🔴 Urgente" : a.tipo === "info" ? "🟠 Información" : "🔵 Aviso"}
-                          </span>
-                          <span style={{ fontSize: 11, color: "#6e7681" }}>· {a.autor}</span>
-                        </div>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: "#f5f5f7", marginBottom: 5 }}>{a.titulo}</div>
-                        <div style={{ fontSize: 13, color: "#c7c7cc", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{a.mensaje}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <button onClick={cerrar} style={{ marginTop: 18, width: "100%", padding: "12px 0", borderRadius: 980, background: "#2997ff", color: "#fff", fontWeight: 700, fontSize: 14, border: "none", cursor: "pointer" }}>
-                    Entendido
-                  </button>
-                </div>
-              </div>
-            )
-          })()}
 
           {/* ── HERO ── */}
           <section className="home-hero">

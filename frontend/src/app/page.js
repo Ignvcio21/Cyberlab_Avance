@@ -5,6 +5,37 @@ import { useRouter } from "next/navigation"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL
 
+// Botón para mostrar/ocultar la contraseña
+function OjoBtn({ ver, onClick }) {
+  return (
+    <button
+      type="button" onClick={onClick} tabIndex={-1}
+      aria-label={ver ? "Ocultar contraseña" : "Mostrar contraseña"}
+      style={{
+        position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+        width: 34, height: 34, borderRadius: 9, padding: 0, cursor: "pointer",
+        background: "rgba(255,255,255,0.06)", border: "1px solid #3a3a3c",
+        display: "flex", alignItems: "center", justifyContent: "center", color: "#8e8e93",
+        transition: "color .15s, background .15s",
+      }}
+      onMouseEnter={e => { e.currentTarget.style.color = "#f5f5f7"; e.currentTarget.style.background = "rgba(41,151,255,0.14)" }}
+      onMouseLeave={e => { e.currentTarget.style.color = "#8e8e93"; e.currentTarget.style.background = "rgba(255,255,255,0.06)" }}
+    >
+      {ver ? (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+      ) : (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      )}
+    </button>
+  )
+}
+
 export default function InicioSesion() {
   const router = useRouter()
   const canvasRef = useRef(null)
@@ -15,18 +46,26 @@ export default function InicioSesion() {
   const [confirmarContrasena, setConfirmarContrasena] = useState("")
   const [mensaje, setMensaje] = useState("")
   const [cargando, setCargando] = useState(false)
+  const [verPass, setVerPass] = useState(false)
+  const [verConfirm, setVerConfirm] = useState(false)
+  const [sugerirRegistro, setSugerirRegistro] = useState(false)  // correo sin cuenta
 
   const manejarLogin = async (e) => {
     e.preventDefault()
     if (cargando) return
-    setMensaje(""); setCargando(true)
+    setMensaje(""); setSugerirRegistro(false); setCargando(true)
     try {
       const respuesta = await fetch(`${API_URL}/iniciar-sesion`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ correo: correo.trim().toLowerCase(), contrasena })
       })
       const datos = await respuesta.json()
-      if (!respuesta.ok) { setMensaje(datos.detail || "Error al iniciar sesión"); return }
+      if (!respuesta.ok) {
+        // 404 = ese correo no tiene cuenta → ofrecer registrarse
+        setSugerirRegistro(respuesta.status === 404)
+        setMensaje(datos.detail || "Error al iniciar sesión")
+        return
+      }
       sessionStorage.setItem("nombre_usuario", datos.nombre_usuario)
       sessionStorage.setItem("nombre_display", datos.nombre || datos.nombre_usuario)
       if (datos.rol)   sessionStorage.setItem("rol_usuario", datos.rol)
@@ -111,8 +150,9 @@ export default function InicioSesion() {
   }, [])
 
   const alternarModo = () => {
-    setMensaje(""); setModoRegistro(v => !v)
+    setMensaje(""); setSugerirRegistro(false); setModoRegistro(v => !v)
     setContrasena(""); setConfirmarContrasena(""); setNombre("")
+    setVerPass(false); setVerConfirm(false)
   }
 
   return (
@@ -176,14 +216,17 @@ export default function InicioSesion() {
               <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#f5f5f7", marginBottom: 6 }}>
                 Contraseña
               </label>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={contrasena}
-                onChange={e => setContrasena(e.target.value)}
-                autoComplete={modoRegistro ? "new-password" : "current-password"}
-                style={{ width: "100%" }}
-              />
+              <div style={{ position: "relative" }}>
+                <input
+                  type={verPass ? "text" : "password"}
+                  placeholder="••••••••"
+                  value={contrasena}
+                  onChange={e => setContrasena(e.target.value)}
+                  autoComplete={modoRegistro ? "new-password" : "current-password"}
+                  style={{ width: "100%", paddingRight: 48 }}
+                />
+                <OjoBtn ver={verPass} onClick={() => setVerPass(v => !v)} />
+              </div>
             </div>
 
             {/* Confirmar contraseña (solo registro) */}
@@ -192,14 +235,17 @@ export default function InicioSesion() {
                 <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#f5f5f7", marginBottom: 6 }}>
                   Confirmar contraseña
                 </label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={confirmarContrasena}
-                  onChange={e => setConfirmarContrasena(e.target.value)}
-                  autoComplete="new-password"
-                  style={{ width: "100%" }}
-                />
+                <div style={{ position: "relative" }}>
+                  <input
+                    type={verConfirm ? "text" : "password"}
+                    placeholder="••••••••"
+                    value={confirmarContrasena}
+                    onChange={e => setConfirmarContrasena(e.target.value)}
+                    autoComplete="new-password"
+                    style={{ width: "100%", paddingRight: 48 }}
+                  />
+                  <OjoBtn ver={verConfirm} onClick={() => setVerConfirm(v => !v)} />
+                </div>
               </div>
             )}
 
@@ -239,13 +285,31 @@ export default function InicioSesion() {
 
           {/* Mensaje */}
           {mensaje && (
-            <p style={{
-              marginTop: 14, fontSize: 13, textAlign: "center",
-              color: mensaje.startsWith("✓") ? "#30d158" : "#ff453a",
-              fontFamily: "'JetBrains Mono', monospace",
-            }}>
-              {mensaje}
-            </p>
+            <div style={{ marginTop: 14, textAlign: "center" }}>
+              <p style={{
+                margin: 0, fontSize: 13,
+                color: mensaje.startsWith("✓") ? "#30d158" : "#ff453a",
+                fontFamily: "'JetBrains Mono', monospace",
+              }}>
+                {mensaje}
+              </p>
+              {sugerirRegistro && (
+                <button
+                  type="button"
+                  onClick={() => { setModoRegistro(true); setSugerirRegistro(false); setMensaje(""); setContrasena("") }}
+                  style={{
+                    marginTop: 10, padding: "9px 18px", borderRadius: 980, cursor: "pointer",
+                    background: "rgba(41,151,255,0.12)", border: "1px solid rgba(41,151,255,0.40)",
+                    color: "#6db8ff", fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                    transition: "all .15s",
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = "rgba(41,151,255,0.20)" }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "rgba(41,151,255,0.12)" }}
+                >
+                  Crear una cuenta con este correo →
+                </button>
+              )}
+            </div>
           )}
 
           {/* Toggle modo */}

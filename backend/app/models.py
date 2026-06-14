@@ -51,9 +51,15 @@ class Alerta(Base):
 
 class IpBloqueada(Base):
     __tablename__ = "ips_bloqueadas"
+    # El firewall es por estudiante: cada uno bloquea en su propio laboratorio.
+    # Dos alumnos pueden bloquear la misma IP sin chocar (unique compuesto).
+    __table_args__ = (
+        UniqueConstraint("usuario_id", "direccion_ip", name="uq_ip_bloqueada_usuario_ip"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    direccion_ip = Column(String, unique=True, index=True, nullable=False)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True, index=True)
+    direccion_ip = Column(String, index=True, nullable=False)
     motivo = Column(Text, nullable=False)
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -327,6 +333,14 @@ class EntregaEjercicioDocente(Base):
     nota = Column(Float, nullable=True)
     comentarios_docente = Column(Text, nullable=True)
     ayudas_pedidas = Column(Integer, nullable=False, default=0)
+    # Snapshot estructurado de la sesión al entregar (JSON): checklist con
+    # comando/segundo por ítem, timeline de comandos, fases, pistas, cierre,
+    # porcentajes y nota sugerida. La frase legible queda en `respuesta`.
+    detalle = Column(Text, nullable=True)
+    # El docente puede reabrir la entrega para que el estudiante vuelva a
+    # rendir el ejercicio. Mientras está True, el alumno puede iniciarlo de
+    # nuevo y la siguiente entrega reemplaza a esta (limpiando la nota).
+    reintento_habilitado = Column(Boolean, default=False, nullable=False)
     fecha_entrega = Column(DateTime(timezone=True), server_default=func.now())
     fecha_evaluacion = Column(DateTime(timezone=True), nullable=True)
 
@@ -334,18 +348,21 @@ class EntregaEjercicioDocente(Base):
     usuario = relationship("Usuario", foreign_keys=[usuario_id])
 
 
-class AnuncioDocente(Base):
-    __tablename__ = "anuncios_docente"
+class ContenidoInformativo(Base):
+    """Override editable del contenido teórico de un nivel. Si existe una fila
+    para (tipo, nivel, seccion), el visor la usa en vez del archivo .md estático.
+    Permite editar la teoría desde el panel sin tocar archivos."""
+    __tablename__ = "contenido_informativo"
+    __table_args__ = (UniqueConstraint("tipo", "nivel", "seccion", name="uq_contenido_tipo_nivel_seccion"),)
 
     id = Column(Integer, primary_key=True, index=True)
-    titulo = Column(String, nullable=False)
-    mensaje = Column(Text, nullable=False)
-    tipo = Column(String, nullable=False, default="aviso")  # urgente | aviso | info
-    autor_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
-    activo = Column(Boolean, default=True, nullable=False)
-    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
+    tipo = Column(String, nullable=False)       # ataque | defensa
+    nivel = Column(Integer, nullable=False)     # 1-7
+    seccion = Column(String, nullable=False)    # introduccion, objetivos, ...
+    contenido = Column(Text, nullable=False, default="")
 
-    autor = relationship("Usuario")
+    actualizado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
+    fecha_actualizacion = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class SesionEjercicio(Base):
@@ -369,6 +386,8 @@ class SesionEjercicio(Base):
     # Plan de fases del ataque en tiempo real (JSON): el ataque escala
     # con el tiempo si el estudiante no lo contiene
     fases = Column(Text, nullable=False, default="[]")
+    # Pistas solicitadas (JSON): [{"seg": segundos desde el inicio, "texto": pista}]
+    pistas = Column(Text, nullable=True)
 
     fecha_inicio = Column(DateTime(timezone=True), server_default=func.now())
     fecha_limite = Column(DateTime(timezone=True), nullable=False)

@@ -41,6 +41,122 @@ const pctDeRespuesta = (respuesta) => {
   return m ? Number(m[1]) : null
 }
 
+// Tarjeta de una entrega (reutilizada dentro del acordeón por nivel)
+function EntregaCard({ e }) {
+  const esDefensa = e.tipo === "defensa"
+  const pctFinal  = pctDeRespuesta(e.respuesta)
+  const evaluado  = e.nota != null
+  return (
+    <div style={{
+      background:"rgba(255,255,255,0.03)",
+      border:`1px solid ${evaluado ? (e.nota >= 4 ? "rgba(0,218,243,0.15)" : "rgba(239,68,68,0.15)") : "rgba(255,255,255,0.07)"}`,
+      borderLeft:`3px solid ${evaluado ? (e.nota >= 4 ? "var(--terciario)" : "#ef4444") : "#ff9f0a"}`,
+      borderRadius:10, padding:"12px 16px"
+    }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10, marginBottom:8 }}>
+        <div>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+            <span style={{
+              fontSize:10, fontWeight:800, fontFamily:"var(--mono)", letterSpacing:"0.05em",
+              padding:"2px 8px", borderRadius:5,
+              background: esDefensa ? "rgba(48,209,88,0.12)" : "rgba(255,69,58,0.10)",
+              border: `1px solid ${esDefensa ? "rgba(48,209,88,0.30)" : "rgba(255,69,58,0.25)"}`,
+              color: esDefensa ? "#30d158" : "#ff8780",
+            }}>
+              {esDefensa ? "🛡 DEFENSA" : "⚔ ATAQUE"}
+            </span>
+            <span style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>
+              Nivel {e.nivel} — {NOMBRES_NIVELES[e.tipo]?.[e.nivel] || ""}
+            </span>
+          </div>
+          <div style={{ fontSize:14, fontWeight:700, color:"#fff" }}>
+            {e.titulo}
+          </div>
+          <div style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:2 }}>
+            🕐 Entregado: {formatFecha(e.fecha_entrega)}
+            {e.fecha_evaluacion && <> · ✓ Evaluado: {formatFecha(e.fecha_evaluacion)}</>}
+          </div>
+        </div>
+        <div style={{ textAlign:"right", flexShrink:0 }}>
+          {evaluado ? (
+            <>
+              <div style={{
+                fontSize:26, fontWeight:900, fontFamily:"var(--mono)",
+                color: e.nota >= 4 ? "var(--terciario-dim)" : "#ffb4ab"
+              }}>
+                {e.nota}
+              </div>
+              <div style={{ fontSize:10, color:"var(--texto-apagado)" }}>/ 7.0</div>
+            </>
+          ) : (
+            <div style={{
+              fontSize:11, color:"#ffb340", fontFamily:"var(--mono)",
+              background:"rgba(255,159,10,0.08)", border:"1px solid rgba(255,159,10,0.25)",
+              borderRadius:6, padding:"4px 8px"
+            }}>
+              ⏳ Esperando evaluación
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Orientación automática de cierre (no es la nota) */}
+      {e.feedback && (
+        <div style={{
+          background:"rgba(94,92,230,0.06)",
+          border:"1px solid rgba(94,92,230,0.18)",
+          borderRadius:8, padding:"8px 12px", fontSize:13,
+          color:"var(--texto-secundario)", lineHeight:1.65, marginBottom:8
+        }}>
+          <span style={{
+            fontSize:10, fontFamily:"var(--mono)", color:"#cfceff",
+            display:"block", marginBottom:4, letterSpacing:"0.05em"
+          }}>
+            🤖 ORIENTACIÓN AUTOMÁTICA — NO ES TU NOTA
+          </span>
+          {e.feedback}
+        </div>
+      )}
+
+      {/* Retroalimentación del docente */}
+      {e.comentarios_docente && (
+        <div style={{
+          background:"rgba(0,163,255,0.06)",
+          border:"1px solid rgba(0,163,255,0.14)",
+          borderRadius:8, padding:"8px 12px", fontSize:13,
+          color:"var(--texto-secundario)", lineHeight:1.65, marginBottom:8
+        }}>
+          <span style={{
+            fontSize:10, fontFamily:"var(--mono)", color:"var(--primario-dim)",
+            display:"block", marginBottom:4, letterSpacing:"0.05em"
+          }}>
+            💬 RETROALIMENTACIÓN DEL DOCENTE
+          </span>
+          {e.comentarios_docente}
+        </div>
+      )}
+
+      {/* Resultado calculado por el servidor */}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:12, fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>
+        {pctFinal != null && (
+          <span style={{
+            background: pctFinal >= 100 ? "rgba(0,218,243,0.08)" : "rgba(255,255,255,0.04)",
+            border:`1px solid ${pctFinal >= 100 ? "rgba(0,218,243,0.20)" : "rgba(255,255,255,0.08)"}`,
+            color: pctFinal >= 100 ? "var(--terciario-dim)" : "var(--texto-apagado)",
+            padding:"2px 8px", borderRadius:4
+          }}>
+            📊 Resultado: {pctFinal}%
+          </span>
+        )}
+        {(e.ayudas_pedidas || 0) > 0 && (
+          <span style={{ color:"#fbbf24" }}>💡 {e.ayudas_pedidas} ayuda{e.ayudas_pedidas > 1 ? "s" : ""} (-{Math.min(e.ayudas_pedidas*5,30)}%)</span>
+        )}
+        {e.respuesta && <span title={e.respuesta}>{e.respuesta.length > 90 ? e.respuesta.slice(0, 90) + "…" : e.respuesta}</span>}
+      </div>
+    </div>
+  )
+}
+
 export default function PaginaNotas() {
   const router = useRouter()
   const [nombreUsuario, setNombreUsuario] = useState("")
@@ -49,7 +165,7 @@ export default function PaginaNotas() {
   const [cargando,      setCargando]      = useState(true)
   const [verHistorial,  setVerHistorial]  = useState(false)
   const [nivelAbierto,  setNivelAbierto]  = useState(null)
-  const [ordenDesc,     setOrdenDesc]     = useState(true)
+  const [orden,         setOrden]         = useState("reciente")  // reciente | antiguo | nombre
 
   useEffect(() => {
     const u = sessionStorage.getItem("nombre_usuario")
@@ -72,11 +188,29 @@ export default function PaginaNotas() {
     }).finally(() => setCargando(false))
   }, [nombreUsuario])
 
-  const ordenar = (lista, campoFecha) => [...lista].sort((a, b) => {
-    const da = new Date(a[campoFecha] || 0)
-    const db = new Date(b[campoFecha] || 0)
-    return ordenDesc ? db - da : da - db
-  })
+  const ordenar = (lista, campoFecha, campoNombre = "titulo") => {
+    const arr = [...lista]
+    if (orden === "nombre") {
+      return arr.sort((a, b) => String(a[campoNombre] || "").localeCompare(String(b[campoNombre] || "")))
+    }
+    return arr.sort((a, b) => {
+      const da = new Date(a[campoFecha] || 0), db = new Date(b[campoFecha] || 0)
+      return orden === "antiguo" ? da - db : db - da
+    })
+  }
+
+  // ── Entregas agrupadas por nivel (acordeón) ──
+  const porNivel = {}
+  entregas.forEach(e => { const n = e.nivel || 1; (porNivel[n] = porNivel[n] || []).push(e) })
+  const niveles = Object.keys(porNivel).map(Number).sort((a, b) => a - b)
+
+  // Abre automáticamente el nivel de la entrega más reciente al cargar
+  useEffect(() => {
+    if (entregas.length && nivelAbierto == null) {
+      const reciente = [...entregas].sort((a, b) => new Date(b.fecha_entrega || 0) - new Date(a.fecha_entrega || 0))[0]
+      setNivelAbierto(reciente?.nivel || niveles[0] || 1)
+    }
+  }, [entregas]) // eslint-disable-line
 
   // ── Resumen de entregas ──
   const evaluadas    = entregas.filter(e => e.nota != null)
@@ -113,13 +247,19 @@ export default function PaginaNotas() {
               </p>
             </div>
             <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-              <button
-                onClick={() => setOrdenDesc(v => !v)}
-                className="boton-secundario"
-                style={{ fontSize:12 }}
+              <select
+                value={orden}
+                onChange={e => setOrden(e.target.value)}
+                style={{
+                  fontSize:12, padding:"8px 12px", borderRadius:8, cursor:"pointer",
+                  background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)",
+                  color:"var(--texto-secundario)", fontFamily:"var(--cuerpo)", outline:"none",
+                }}
               >
-                {ordenDesc ? "↓ Más reciente" : "↑ Más antiguo"}
-              </button>
+                <option value="reciente">↓ Más reciente</option>
+                <option value="antiguo">↑ Más antiguo</option>
+                <option value="nombre">A–Z por nombre</option>
+              </select>
               <button onClick={() => router.push("/dashboard")} className="logout-button">
                 Volver al laboratorio
               </button>
@@ -169,105 +309,48 @@ export default function PaginaNotas() {
             </section>
           )}
 
-          {/* ── Entregas de ejercicios ── */}
+          {/* ── Entregas agrupadas por nivel (acordeón) ── */}
           {!cargando && entregas.length > 0 && (
             <section className="panel" style={{ display:"flex", flexDirection:"column", gap:10 }}>
               <div style={{ fontSize:14, fontWeight:700, color:"#fff", marginBottom:4 }}>
                 Mis entregas
               </div>
-              {ordenar(entregas, "fecha_entrega").map(e => {
-                const esDefensa = e.tipo === "defensa"
-                const pctFinal  = pctDeRespuesta(e.respuesta)
-                const evaluado  = e.nota != null
+              {niveles.map(n => {
+                const lista   = ordenar(porNivel[n], "fecha_entrega", "titulo")
+                const evals   = porNivel[n].filter(e => e.nota != null).length
+                const abierto = nivelAbierto === n
                 return (
-                  <div key={e.id} style={{
-                    background:"rgba(255,255,255,0.03)",
-                    border:`1px solid ${evaluado ? (e.nota >= 4 ? "rgba(0,218,243,0.15)" : "rgba(239,68,68,0.15)") : "rgba(255,255,255,0.07)"}`,
-                    borderLeft:`3px solid ${evaluado ? (e.nota >= 4 ? "var(--terciario)" : "#ef4444") : "#ff9f0a"}`,
-                    borderRadius:10, padding:"12px 16px"
+                  <div key={n} style={{
+                    border:"1px solid rgba(255,255,255,0.08)", borderRadius:12,
+                    overflow:"hidden", background:"rgba(255,255,255,0.02)"
                   }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:10, marginBottom:8 }}>
-                      <div>
-                        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
-                          <span style={{
-                            fontSize:10, fontWeight:800, fontFamily:"var(--mono)", letterSpacing:"0.05em",
-                            padding:"2px 8px", borderRadius:5,
-                            background: esDefensa ? "rgba(48,209,88,0.12)" : "rgba(255,69,58,0.10)",
-                            border: `1px solid ${esDefensa ? "rgba(48,209,88,0.30)" : "rgba(255,69,58,0.25)"}`,
-                            color: esDefensa ? "#30d158" : "#ff8780",
-                          }}>
-                            {esDefensa ? "🛡 DEFENSA" : "⚔ ATAQUE"}
-                          </span>
-                          <span style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>
-                            Nivel {e.nivel} — {NOMBRES_NIVELES[e.tipo]?.[e.nivel] || ""}
-                          </span>
-                        </div>
-                        <div style={{ fontSize:14, fontWeight:700, color:"#fff" }}>
-                          {e.titulo}
-                        </div>
-                        <div style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:2 }}>
-                          🕐 Entregado: {formatFecha(e.fecha_entrega)}
-                          {e.fecha_evaluacion && <> · ✓ Evaluado: {formatFecha(e.fecha_evaluacion)}</>}
-                        </div>
-                      </div>
-                      <div style={{ textAlign:"right", flexShrink:0 }}>
-                        {evaluado ? (
-                          <>
-                            <div style={{
-                              fontSize:26, fontWeight:900, fontFamily:"var(--mono)",
-                              color: e.nota >= 4 ? "var(--terciario-dim)" : "#ffb4ab"
-                            }}>
-                              {e.nota}
-                            </div>
-                            <div style={{ fontSize:10, color:"var(--texto-apagado)" }}>/ 7.0</div>
-                          </>
-                        ) : (
-                          <div style={{
-                            fontSize:11, color:"#ffb340", fontFamily:"var(--mono)",
-                            background:"rgba(255,159,10,0.08)", border:"1px solid rgba(255,159,10,0.25)",
-                            borderRadius:6, padding:"4px 8px"
-                          }}>
-                            ⏳ Esperando evaluación
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Retroalimentación del docente */}
-                    {e.comentarios_docente && (
+                    <button
+                      onClick={() => setNivelAbierto(abierto ? null : n)}
+                      style={{
+                        width:"100%", textAlign:"left", background:"none", border:"none",
+                        padding:"12px 16px", cursor:"pointer", display:"flex", alignItems:"center", gap:12,
+                        borderBottom: abierto ? "1px solid rgba(255,255,255,0.07)" : "none",
+                      }}
+                    >
                       <div style={{
-                        background:"rgba(0,163,255,0.06)",
-                        border:"1px solid rgba(0,163,255,0.14)",
-                        borderRadius:8, padding:"8px 12px", fontSize:13,
-                        color:"var(--texto-secundario)", lineHeight:1.65, marginBottom:8
-                      }}>
-                        <span style={{
-                          fontSize:10, fontFamily:"var(--mono)", color:"var(--primario-dim)",
-                          display:"block", marginBottom:4, letterSpacing:"0.05em"
-                        }}>
-                          💬 RETROALIMENTACIÓN DEL DOCENTE
-                        </span>
-                        {e.comentarios_docente}
+                        width:30, height:30, borderRadius:8, flexShrink:0,
+                        background:"rgba(41,151,255,0.12)", border:"1px solid rgba(41,151,255,0.25)",
+                        display:"grid", placeItems:"center", fontWeight:900, fontSize:13,
+                        fontFamily:"var(--mono)", color:"#6db8ff",
+                      }}>{n}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ color:"#fff", fontWeight:700, fontSize:14 }}>Nivel {n}</div>
+                        <div style={{ color:"var(--texto-apagado)", fontSize:11, fontFamily:"var(--mono)", marginTop:2 }}>
+                          {porNivel[n].length} entrega{porNivel[n].length !== 1 ? "s" : ""}{evals > 0 ? ` · ${evals} evaluada${evals !== 1 ? "s" : ""}` : ""}
+                        </div>
+                      </div>
+                      <span style={{ color:"var(--texto-apagado)", fontSize:14 }}>{abierto ? "▲" : "▼"}</span>
+                    </button>
+                    {abierto && (
+                      <div style={{ padding:"12px 16px", display:"flex", flexDirection:"column", gap:10 }}>
+                        {lista.map(e => <EntregaCard key={e.id} e={e} />)}
                       </div>
                     )}
-
-                    {/* Resultado calculado por el servidor */}
-                    <div style={{ display:"flex", flexWrap:"wrap", gap:12, fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>
-                      {pctFinal != null && (
-                        <span style={{
-                          background: pctFinal >= 100 ? "rgba(0,218,243,0.08)" : "rgba(255,255,255,0.04)",
-                          border:`1px solid ${pctFinal >= 100 ? "rgba(0,218,243,0.20)" : "rgba(255,255,255,0.08)"}`,
-                          color: pctFinal >= 100 ? "var(--terciario-dim)" : "var(--texto-apagado)",
-                          padding:"2px 8px", borderRadius:4
-                        }}>
-                          📊 Resultado: {pctFinal}%
-                        </span>
-                      )}
-                      {(e.ayudas_pedidas || 0) > 0 && (
-                        <span style={{ color:"#fbbf24" }}>💡 {e.ayudas_pedidas} ayuda{e.ayudas_pedidas > 1 ? "s" : ""} (-{Math.min(e.ayudas_pedidas*5,30)}%)</span>
-                      )}
-                      {e.respuesta && <span title={e.respuesta}>{e.respuesta.length > 90 ? e.respuesta.slice(0, 90) + "…" : e.respuesta}</span>}
-                    </div>
                   </div>
                 )
               })}
@@ -295,7 +378,7 @@ export default function PaginaNotas() {
                       <div style={{ fontSize:12, fontWeight:700, color:"var(--texto-apagado)", fontFamily:"var(--mono)", margin:"8px 0 6px" }}>
                         Nivel {n} — {NOMBRES_NIVELES_HIST[n] || ""}
                       </div>
-                      {ordenar(porNivelHist[n], "fecha_inicio").map(it => (
+                      {ordenar(porNivelHist[n], "fecha_inicio", "descripcion_ejercicio").map(it => (
                         <div key={it.intento_id} style={{
                           background:"rgba(255,255,255,0.03)",
                           border:"1px solid rgba(255,255,255,0.07)",

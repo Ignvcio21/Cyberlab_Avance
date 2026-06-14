@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import GuardSesion from "../../componentes/GuardSesion"
 import BarraSuperior from "../../componentes/BarraSuperior"
 import TransicionPagina from "../../componentes/TransicionPagina"
+import FeedbackCierre from "../../componentes/FeedbackCierre"
 
 // ================================================================
 // CONSTANTES
@@ -60,6 +61,10 @@ export default function DefensaDashboard() {
   const [popupGano,   setPopupGano]   = useState(false)
   const finalizadaRef = useRef(false)
 
+  // ── Feedback automático de cierre (orientación para el estudiante) ──
+  const [feedback,         setFeedback]         = useState(null)   // { texto, fuente }
+  const [feedbackCargando, setFeedbackCargando] = useState(false)
+
   // ── Ataque en tiempo real (fases reales generadas por el servidor) ──
   const [faseAtaqueDisparada, setFaseAtaqueDisparada] = useState([])
   const fasesPrevRef = useRef([])
@@ -69,6 +74,19 @@ export default function DefensaDashboard() {
   const pctDocente    = sesion?.porcentaje ?? 0
   const ayudasDocente = sesion?.ayudas ?? 0
   const sesionActiva  = sesion?.estado === "activa"
+
+  // Layout responsivo: escenario + terminal lado a lado (50/50) en pantallas anchas; apilado en chicas
+  const [anchoVentana, setAnchoVentana] = useState(1400)
+  const [altoVentana, setAltoVentana]   = useState(900)
+  useEffect(() => {
+    const fn = () => { setAnchoVentana(window.innerWidth); setAltoVentana(window.innerHeight) }
+    fn()
+    window.addEventListener("resize", fn)
+    return () => window.removeEventListener("resize", fn)
+  }, [])
+  const ladoALado = !!(ejDocenteActivo && sesionActiva && anchoVentana > 980)
+  // Alto máximo de cada columna: que ambas quepan en pantalla con scroll interno
+  const altoPanel = Math.max(440, altoVentana - 180)
 
   const porNivel = useMemo(() => {
     const m = {}
@@ -133,6 +151,7 @@ export default function DefensaDashboard() {
       setPopupFinPct(s.porcentaje_final ?? s.porcentaje ?? 0)
       setPopupGano(s.estado === "completada")
       setPopupFin(true)
+      cargarFeedback(s.ejercicio_id)
       if (s.ejercicio_id) setEntregados(prev => new Set([...prev, s.ejercicio_id]))
       const lineas = [
         "────────────────────────────────────────────",
@@ -149,6 +168,8 @@ export default function DefensaDashboard() {
 
   // ── Iniciar ejercicio (el backend crea la sesión) ──────────────
   const iniciarEjDocente = async (ej) => {
+    // Guarda: si este ejercicio ya está activo, no reiniciar (evita reset del temporizador)
+    if (sesionActiva && ejDocenteActivo?.id === ej.id) return
     try {
       const r = await fetch(`${API}/ejercicios-docente/${ej.id}/iniciar`, {
         method: "POST", headers: getAuthHeaders(),
@@ -157,6 +178,7 @@ export default function DefensaDashboard() {
       if (!r.ok) { setMensaje(d?.detail || "No se pudo iniciar el ejercicio"); return }
       finalizadaRef.current = false
       setEjDocenteActivo(ej)
+      setFeedback(null)
       setPistaDocente(""); setMostrarPista(false)
       setFaseAtaqueDisparada([])
       fasesPrevRef.current = []
@@ -203,6 +225,17 @@ export default function DefensaDashboard() {
       }
     } catch {}
   }, [aplicarSesion, pctDocente, cargarEntregados])
+
+  // ── Feedback de cierre: orientación automática para el estudiante ──
+  const cargarFeedback = async (ejId) => {
+    if (!ejId) return
+    setFeedback(null); setFeedbackCargando(true)
+    try {
+      const r = await fetch(`${API}/ejercicios-docente/${ejId}/mi-feedback`, { headers: getAuthHeaders() })
+      if (r.ok) setFeedback(await r.json())
+    } catch {}
+    finally { setFeedbackCargando(false) }
+  }
 
   // ── Pedir pista (el backend cuenta las ayudas) ─────────────────
   const pedirPistaDocente = async () => {
@@ -400,7 +433,7 @@ export default function DefensaDashboard() {
                         const activo    = ejDocenteActivo?.id === ej.id && sesionActiva
                         const entregado = entregados.has(ej.id)
                         return (
-                          <button key={ej.id} onClick={() => setConfirmEjDocente(ej)} style={{
+                          <button key={ej.id} onClick={() => { if (!activo) setConfirmEjDocente(ej) }} style={{
                             textAlign:"left", padding:"11px 14px", borderRadius:10, width:"100%",
                             border: activo ? "1.5px solid #30d158" : entregado ? "1px solid rgba(48,209,88,0.30)" : "1px solid #2c2c2e",
                             background: activo ? "rgba(48,209,88,0.10)" : entregado ? "rgba(48,209,88,0.06)" : "#242426",
@@ -428,9 +461,12 @@ export default function DefensaDashboard() {
               </div>
             </div>
 
-            {/* ── EJERCICIO DOCENTE ACTIVO ── */}
+            {/* ── ESCENARIO + TERMINAL lado a lado (mitad y mitad cuando hay ejercicio activo) ── */}
+            <div style={ladoALado ? { display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, alignItems:"stretch" } : undefined}>
+
+            {/* EJERCICIO DOCENTE ACTIVO */}
             {ejDocenteActivo && sesionActiva && (
-              <div className="exercise-card" style={{ borderColor:"rgba(48,209,88,0.35)" }}>
+              <div className="exercise-card" style={{ borderColor:"rgba(48,209,88,0.35)", ...(ladoALado ? { maxHeight: altoPanel, overflowY: "auto", paddingBottom: 8 } : {}) }}>
                 {/* Header con título + timer */}
                 <div className="exercise-header">
                   <div style={{ flex:1 }}>
@@ -469,10 +505,10 @@ export default function DefensaDashboard() {
                   <span style={{ color: pctDocente===100?"#30d158":"var(--texto-apagado)" }}>{pctDocente}%</span>
                 </div>
 
-                {/* Checklist de pasos — grid horizontal */}
+                {/* Checklist de pasos — columna única en modo lado a lado, grilla cuando está apilado */}
                 <div style={{
                   display:"grid",
-                  gridTemplateColumns:"repeat(auto-fit, minmax(220px, 1fr))",
+                  gridTemplateColumns: ladoALado ? "1fr" : "repeat(auto-fit, minmax(220px, 1fr))",
                   gap:10, margin:"16px 24px 0"
                 }}>
                   {sesionItems.map((it, idx) => {
@@ -567,7 +603,7 @@ export default function DefensaDashboard() {
             )}
 
             {/* ── TERMINAL SOC ── */}
-            <section style={{ background:"#0d1117", border:"1px solid rgba(48,209,88,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)" }}>
+            <section style={{ background:"#0d1117", border:"1px solid rgba(48,209,88,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)", display: ladoALado ? "flex" : undefined, flexDirection: ladoALado ? "column" : undefined }}>
               <div style={{ background:"#161b22", padding:"11px 16px", display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
                 <div style={{ display:"flex", gap:6 }}>
                   <div style={{ width:12, height:12, borderRadius:"50%", background:"#ff5f57" }}/>
@@ -581,7 +617,7 @@ export default function DefensaDashboard() {
                   ● SOC LIVE
                 </div>
               </div>
-              <div className="terminal-window" ref={termRef} style={{ borderRadius:0, borderLeft:"none", borderRight:"none", borderTop:"none" }}>
+              <div className="terminal-window" ref={termRef} style={{ borderRadius:0, borderLeft:"none", borderRight:"none", borderTop:"none", flex: ladoALado ? 1 : undefined, height: ladoALado ? "auto" : undefined, maxHeight: ladoALado ? "none" : undefined, minHeight: ladoALado ? 0 : undefined }}>
                 {historial.map((l, i) => (
                   <div key={i} className={`terminal-line ${l.startsWith("soc@cyberlab") ? "terminal-cmd" : ""}`}>{l}</div>
                 ))}
@@ -594,6 +630,7 @@ export default function DefensaDashboard() {
               </form>
             </section>
 
+            </div>
 
             {/* ── Popup fin de ejercicio docente ── */}
             {popupFin && (
@@ -624,6 +661,9 @@ export default function DefensaDashboard() {
                   <div style={{ fontSize:32, fontWeight:900, fontFamily:"var(--mono)", color: popupGano ? "#30d158" : "#ff453a", marginBottom:20 }}>
                     {popupFinPct}%
                   </div>
+
+                  {/* Orientación automática de cierre (para el estudiante) */}
+                  <FeedbackCierre cargando={feedbackCargando} feedback={feedback} items={sesion?.items || []} />
 
                   <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
                     <button

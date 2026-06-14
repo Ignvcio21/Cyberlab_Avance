@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from typing import Dict, Any, List
 from datetime import datetime, timezone, timedelta
+import json
 import os
 import random
 import re
@@ -28,14 +29,14 @@ from .models import (
     PlantillaEscenario, VariablePlantilla, EscenarioInstancia, VariableInstancia,
     EscenarioActivoUsuario, BloqueoEscenario,
     EjercicioDocente, ItemEjercicioDocente, EntregaEjercicioDocente,
-    AnuncioDocente, SesionEjercicio,
+    SesionEjercicio, ContenidoInformativo,
 )
 from .sesiones import (
     crear_sesion, finalizar_sesion, obtener_sesion_activa,
     verificar_expiracion, sesion_a_dict, evaluar_comando_en_sesion,
     materializar_fases, materializar_fases_usuario,
     item_verificable, CATEGORIAS_VERIFICABLES, comandos_sugeridos_para_item,
-    finalizar_sesiones_vencidas,
+    finalizar_sesiones_vencidas, registrar_pista,
     aware_utc,
 )
 from .terminal_comandos import (
@@ -57,10 +58,9 @@ from .schemas import (
     SolicitudCambiarRol, SolicitudEliminarUsuario,
     SolicitudCrearEjercicioDocente, EjercicioDocenteSalida,
     SolicitudEntregarEjercicio, SolicitudEvaluarEntrega, EntregaSalida,
-    SolicitudIaAsistir,
+    SolicitudIaAsistir, SolicitudGuardarContenido,
     SolicitudRecuperarContrasena, SolicitudResetContrasena,
     SolicitudActualizarPerfil, SolicitudCambiarContrasenaPerfil,
-    SolicitudCrearAnuncio, SolicitudEditarAnuncio,
 )
 from .email_utils import (
     correo_recuperar_contrasena,
@@ -75,6 +75,40 @@ from .auth import (
 load_dotenv()
 cliente_openai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 Base.metadata.create_all(bind=engine)
+
+
+def _migrar_columnas_nuevas():
+    """create_all no altera tablas existentes: agrega aquí las columnas
+    nuevas en bases ya desplegadas (SQLite local / PostgreSQL en Railway)."""
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    es_sqlite = engine.dialect.name == "sqlite"
+    bool_def = "BOOLEAN DEFAULT 0" if es_sqlite else "BOOLEAN DEFAULT FALSE"
+    pendientes = {
+        "entregas_ejercicio_docente": [("detalle", "TEXT"), ("reintento_habilitado", bool_def)],
+        "sesiones_ejercicio": [("pistas", "TEXT")],
+    }
+    with engine.begin() as conexion:
+        for tabla, columnas in pendientes.items():
+            if tabla not in inspector.get_table_names():
+                continue
+            existentes = {c["name"] for c in inspector.get_columns(tabla)}
+            for nombre, tipo in columnas:
+                if nombre not in existentes:
+                    conexion.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {tipo}"))
+
+    # ips_bloqueadas pasó de global a por-usuario. El UNIQUE viejo sobre
+    # direccion_ip no se puede quitar con ALTER de forma portable, así que se
+    # recrea la tabla: los bloqueos antiguos no tienen dueño y de todos modos
+    # se limpian por ejercicio.
+    if "ips_bloqueadas" in inspector.get_table_names():
+        cols_ip = {c["name"] for c in inspector.get_columns("ips_bloqueadas")}
+        if "usuario_id" not in cols_ip:
+            IpBloqueada.__table__.drop(engine)
+            IpBloqueada.__table__.create(engine)
+
+
+_migrar_columnas_nuevas()
 
 # ── Rate limiter ──────────────────────────────────────────────────
 # Detrás del proxy de Railway todos los clientes comparten la IP del
@@ -524,7 +558,7 @@ def raiz():
 @app.get("/health")
 def health():
     import os
-    return {"status": "ok", "secret_key_prefix": os.environ.get("SECRET_KEY","")[:8]}
+    return {"status": "ok"}
 
 
 
@@ -533,9 +567,11 @@ def health():
 @app.post("/iniciar-sesion")
 @limiter.limit("10/minute")
 def iniciar_sesion(request: Request, datos: SolicitudInicioSesion, bd: Session = Depends(obtener_bd)):
-    u = bd.query(Usuario).filter(Usuario.correo == datos.correo).first()
+    from sqlalchemy import func
+    correo = (datos.correo or "").strip()
+    u = bd.query(Usuario).filter(func.lower(Usuario.correo) == correo.lower()).first()
     if not u or not verificar_contrasena(datos.contrasena, u.contrasena):
-        raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
     # Migración automática: cuentas antiguas con contraseña en texto plano
     # se re-cifran con bcrypt en su primer login exitoso
     if not (u.contrasena or "").startswith("$2"):
@@ -586,23 +622,6 @@ def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_admin), bd: Ses
             (Usuario.correo.ilike(termino)) | (Usuario.nombre.ilike(termino)) | (Usuario.nombre_usuario.ilike(termino))
         )
     return query.order_by(Usuario.id.asc()).all()
-
-
-@app.get("/admin/logs")
-def admin_logs(usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd), limite: int = 200):
-    acciones = bd.query(AccionUsuario).order_by(AccionUsuario.fecha_creacion.desc()).limit(limite).all()
-    salida = []
-    for a in acciones:
-        u = bd.query(Usuario).filter(Usuario.id == a.usuario_id).first()
-        salida.append({
-            "id": a.id,
-            "usuario": u.nombre_usuario if u else "sistema",
-            "rol": u.rol if u else "—",
-            "comando": a.comando,
-            "resultado": (a.resultado or "")[:120],
-            "fecha": a.fecha_creacion.isoformat() if a.fecha_creacion else None,
-        })
-    return {"logs": salida}
 
 
 @app.post("/admin/cambiar-rol")
@@ -826,6 +845,63 @@ def _parse_tiempo_legible(respuesta: str) -> int | None:
     return seg or None
 
 
+def _detalle_entrega(en: EntregaEjercicioDocente) -> dict | None:
+    """Snapshot estructurado de la entrega (columna detalle), si existe."""
+    try:
+        det = json.loads(en.detalle) if en.detalle else None
+        return det if isinstance(det, dict) else None
+    except Exception:
+        return None
+
+
+def _resumen_entrega(en: EntregaEjercicioDocente) -> dict:
+    """Resumen estructurado para las vistas del docente. Usa el snapshot
+    `detalle` cuando existe; para entregas antiguas reconstruye lo posible
+    desde la frase de texto (único formato que tenían)."""
+    det = _detalle_entrega(en)
+    if det:
+        return {
+            "cierre": det.get("cierre"),
+            "porcentaje": det.get("porcentaje"),
+            "penalizacion": det.get("penalizacion"),
+            "porcentaje_final": det.get("porcentaje_final"),
+            "tiempo_seg": det.get("tiempo_seg"),
+            "ayudas": det.get("ayudas"),
+            "nota_sugerida": det.get("nota_sugerida"),
+            "fase_max": det.get("fase_max"),
+            "total_fases": det.get("total_fases"),
+            "tiene_informe": bool(det.get("informe")),
+            "items": [
+                {"descripcion": i.get("descripcion"), "completado": bool(i.get("completado"))}
+                for i in (det.get("items") or [])
+            ],
+        }
+    texto = en.respuesta or ""
+    m_final = re.search(r"Resultado:\s*(\d+)%", texto)
+    pct_final = int(m_final.group(1)) if m_final else None
+    m_check = re.search(r"Checklist:\s*(\d+)%", texto)
+    penal = min((en.ayudas_pedidas or 0) * 5, 30)
+    pct = int(m_check.group(1)) if m_check else pct_final
+    cierre = None
+    if texto.startswith("Completado"):
+        cierre = "completada"
+    elif texto.startswith("Tiempo agotado"):
+        cierre = "expirada"
+    return {
+        "cierre": cierre,
+        "porcentaje": pct,
+        "penalizacion": penal,
+        "porcentaje_final": pct_final,
+        "tiempo_seg": _parse_tiempo_legible(texto),
+        "ayudas": en.ayudas_pedidas or 0,
+        "nota_sugerida": round(1.0 + 6.0 * pct_final / 100.0, 1) if pct_final is not None else None,
+        "fase_max": None,
+        "total_fases": None,
+        "tiene_informe": False,
+        "items": None,
+    }
+
+
 # ── Intentos (sistema histórico, solo lectura) ────────────────────
 # El endpoint de escritura /intentos/crear fue eliminado: aceptaba el
 # porcentaje y estado declarados por el cliente, lo que permitía forjar
@@ -846,7 +922,7 @@ def docente_listar_entregas(usuario_actual: Usuario = Depends(solo_docente), bd:
     for en in entregas:
         u = bd.query(Usuario).filter(Usuario.id == en.usuario_id).first()
         ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == en.ejercicio_id).first()
-        m_pct = re.search(r"Resultado:\s*(\d+)%", en.respuesta or "")
+        resumen = _resumen_entrega(en)
         salida.append({
             "intento_id": en.id,  # alias para compatibilidad con las vistas
             "entrega_id": en.id,
@@ -856,8 +932,8 @@ def docente_listar_entregas(usuario_actual: Usuario = Depends(solo_docente), bd:
             "tipo": ej.tipo if ej else None,
             "nivel": ej.nivel if ej else None,
             "estado": en.estado,
-            "porcentaje": int(m_pct.group(1)) if m_pct else None,
-            "tiempo_seg": _parse_tiempo_legible(en.respuesta),
+            "porcentaje": resumen.get("porcentaje_final"),
+            "tiempo_seg": resumen.get("tiempo_seg"),
             "errores": None,
             "ayudas_pedidas": en.ayudas_pedidas or 0,
             "nota": en.nota,
@@ -896,7 +972,12 @@ def docente_listar_intentos(usuario_actual: Usuario = Depends(solo_docente), bd:
 
 @app.get("/mis-entregas-docente")
 def mis_entregas_docente(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == usuario_actual.id).all()
+    # Las entregas con reintento habilitado NO bloquean: el ejercicio vuelve
+    # a estar disponible para que el estudiante lo rinda de nuevo.
+    entregas = bd.query(EntregaEjercicioDocente).filter(
+        EntregaEjercicioDocente.usuario_id == usuario_actual.id,
+        EntregaEjercicioDocente.reintento_habilitado == False,
+    ).all()
     return {"ejercicio_ids": [e.ejercicio_id for e in entregas]}
 
 
@@ -1009,25 +1090,13 @@ def obtener_estadisticas(usuario_actual: Usuario = Depends(obtener_usuario_actua
     }
 
 
-@app.get("/reporte")
-def obtener_reporte(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    ips = bd.query(IpBloqueada).all()
-    acciones = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == usuario_actual.id).order_by(AccionUsuario.fecha_creacion.desc()).limit(50).all()
-    return {
-        "total_eventos": _q_eventos(bd, usuario_actual.id).count(),
-        "total_alertas": _q_alertas(bd, usuario_actual.id).count(),
-        "ips_bloqueadas": [{"direccion_ip": ip.direccion_ip, "motivo": ip.motivo} for ip in ips],
-        "acciones": [{"comando": a.comando, "resultado": a.resultado} for a in acciones]
-    }
-
-
 # ── Terminal ataque ───────────────────────────────────────────────
 
 def _construir_contexto_real(bd: Session, usuario_id: int) -> str:
     """Construye contexto con datos reales de la BD para enriquecer el prompt de IA."""
     eventos = _q_eventos(bd, usuario_id).order_by(Evento.fecha_creacion.desc()).limit(8).all()
     alertas = _q_alertas(bd, usuario_id).order_by(Alerta.fecha_creacion.desc()).limit(5).all()
-    bloqueadas = bd.query(IpBloqueada).limit(5).all()
+    bloqueadas = bd.query(IpBloqueada).filter(IpBloqueada.usuario_id == usuario_id).limit(5).all()
     ips_activas = list(set(e.ip_origen for e in eventos))[:5]
 
     ctx = "=== CONTEXTO DEL LABORATORIO (datos reales) ===\n"
@@ -1066,7 +1135,9 @@ def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Sess
     # Patrón Command: cada comando es un handler registrado; lo que no
     # está implementado se delega en la IA con contexto real (fallback).
     cmd_l = ALIAS_ATAQUE.get(raw.lower().strip(), raw.lower().strip())
-    salida = despachar(REGISTRO_ATAQUE, bd, usuario_actual, cmd_l)
+    sesion_activa = obtener_sesion_activa(bd, usuario_actual.id)
+    salida = despachar(REGISTRO_ATAQUE, bd, usuario_actual, cmd_l,
+                       ctx={"sesion": sesion_activa})
     if salida is not None:
         guardar("OK"); return {"salida": salida}
 
@@ -1175,10 +1246,12 @@ def _terminal_defensa(datos: SolicitudTerminalDefensa, usuario_actual: Usuario, 
 
 @app.get("/perfil")
 def obtener_perfil(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    intentos = bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == usuario_actual.id).all()
-    evaluados = [it for it in intentos if it.evaluacion is not None]
-    nota_prom = round(sum(it.evaluacion.nota for it in evaluados) / len(evaluados), 1) if evaluados else None
+    # Las estadísticas salen del sistema REAL de entregas (no del legacy
+    # IntentoEjercicio, que dejaba los números en 0 aunque el alumno entregara).
     entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == usuario_actual.id).all()
+    evaluadas = [e for e in entregas if e.nota is not None]
+    aprobadas = [e for e in evaluadas if e.nota >= 4]
+    nota_prom = round(sum(e.nota for e in evaluadas) / len(evaluadas), 1) if evaluadas else None
     return {
         "id": usuario_actual.id,
         "nombre_usuario": usuario_actual.nombre_usuario,
@@ -1187,10 +1260,10 @@ def obtener_perfil(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd
         "rol": usuario_actual.rol,
         "fecha_creacion": usuario_actual.fecha_creacion.isoformat() if usuario_actual.fecha_creacion else None,
         "stats": {
-            "intentos_total": len(intentos),
-            "intentos_evaluados": len(evaluados),
+            "entregas_total": len(entregas),
+            "entregas_evaluadas": len(evaluadas),
             "nota_promedio": nota_prom,
-            "entregas_docente": len(entregas),
+            "entregas_aprobadas": len(aprobadas),
         }
     }
 
@@ -1224,51 +1297,83 @@ def cambiar_contrasena_perfil(datos: SolicitudCambiarContrasenaPerfil, usuario_a
     return {"mensaje": "Contraseña actualizada correctamente"}
 
 
-# ── Anuncios docente ──────────────────────────────────────────────
+# ── Contenido informativo (teoría editable desde el panel) ────────
 
-@app.get("/anuncios")
-def listar_anuncios(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    anuncios = bd.query(AnuncioDocente).filter(AnuncioDocente.activo == True).order_by(AnuncioDocente.fecha_creacion.desc()).all()
-    return {"anuncios": [
-        {
-            "id": a.id, "titulo": a.titulo, "mensaje": a.mensaje, "tipo": a.tipo,
-            "autor": a.autor.nombre or a.autor.nombre_usuario if a.autor else "—",
-            "fecha_creacion": a.fecha_creacion.isoformat() if a.fecha_creacion else None,
-        }
-        for a in anuncios
-    ]}
+SECCIONES_CONTENIDO = {
+    "introduccion", "objetivos", "fundamentos", "metodologia", "comandos",
+    "evidencia", "procedimiento", "errores", "buenas_practicas", "criterio",
+}
+TIPOS_CONTENIDO = {"ataque", "defensa"}
 
 
-@app.post("/anuncios")
-def crear_anuncio(datos: SolicitudCrearAnuncio, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
-    tipo = datos.tipo if datos.tipo in ("urgente", "aviso", "info") else "aviso"
-    anuncio = AnuncioDocente(titulo=datos.titulo.strip(), mensaje=datos.mensaje.strip(), tipo=tipo, autor_id=usuario_actual.id)
-    bd.add(anuncio)
+def _validar_ref_contenido(tipo: str, nivel: int, seccion: str):
+    if tipo not in TIPOS_CONTENIDO:
+        raise HTTPException(status_code=400, detail="Tipo inválido (ataque|defensa)")
+    if not (1 <= nivel <= 7):
+        raise HTTPException(status_code=400, detail="Nivel fuera de rango (1-7)")
+    if seccion not in SECCIONES_CONTENIDO:
+        raise HTTPException(status_code=400, detail="Sección desconocida")
+
+
+@app.get("/contenido-informativo/{tipo}/{nivel}")
+def overrides_contenido(tipo: str, nivel: int, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """Secciones de este tipo/nivel que tienen contenido editado en BD."""
+    rows = bd.query(ContenidoInformativo).filter(
+        ContenidoInformativo.tipo == tipo, ContenidoInformativo.nivel == nivel,
+    ).all()
+    return {"overrides": [r.seccion for r in rows]}
+
+
+@app.get("/contenido-informativo/{tipo}/{nivel}/{seccion}")
+def obtener_contenido_informativo(tipo: str, nivel: int, seccion: str, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """Devuelve el override editado si existe; si no, origen=null y el cliente
+    usa el archivo .md estático."""
+    row = bd.query(ContenidoInformativo).filter(
+        ContenidoInformativo.tipo == tipo, ContenidoInformativo.nivel == nivel,
+        ContenidoInformativo.seccion == seccion,
+    ).first()
+    if not row:
+        return {"contenido": None, "origen": None}
+    return {
+        "contenido": row.contenido, "origen": "db",
+        "fecha_actualizacion": row.fecha_actualizacion.isoformat() if row.fecha_actualizacion else None,
+    }
+
+
+@app.put("/contenido-informativo/{tipo}/{nivel}/{seccion}")
+def guardar_contenido_informativo(tipo: str, nivel: int, seccion: str, datos: SolicitudGuardarContenido, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    _validar_ref_contenido(tipo, nivel, seccion)
+    row = bd.query(ContenidoInformativo).filter(
+        ContenidoInformativo.tipo == tipo, ContenidoInformativo.nivel == nivel,
+        ContenidoInformativo.seccion == seccion,
+    ).first()
+    if row:
+        row.contenido = datos.contenido
+        row.actualizado_por_id = usuario_actual.id
+    else:
+        bd.add(ContenidoInformativo(
+            tipo=tipo, nivel=nivel, seccion=seccion,
+            contenido=datos.contenido, actualizado_por_id=usuario_actual.id,
+        ))
     bd.commit()
-    bd.refresh(anuncio)
-    return {"mensaje": "Anuncio publicado", "id": anuncio.id}
+    return {"mensaje": "Contenido guardado"}
 
 
-@app.put("/anuncios/{anuncio_id}")
-def editar_anuncio(anuncio_id: int, datos: SolicitudEditarAnuncio, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
-    anuncio = bd.query(AnuncioDocente).filter(AnuncioDocente.id == anuncio_id).first()
-    if not anuncio:
-        raise HTTPException(status_code=404, detail="Anuncio no encontrado")
-    anuncio.titulo = datos.titulo.strip()
-    anuncio.mensaje = datos.mensaje.strip()
-    anuncio.tipo = datos.tipo if datos.tipo in ("urgente", "aviso", "info") else "aviso"
-    bd.commit()
-    return {"mensaje": "Anuncio actualizado"}
-
-
-@app.delete("/anuncios/{anuncio_id}")
-def eliminar_anuncio(anuncio_id: int, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
-    anuncio = bd.query(AnuncioDocente).filter(AnuncioDocente.id == anuncio_id).first()
-    if not anuncio:
-        raise HTTPException(status_code=404, detail="Anuncio no encontrado")
-    anuncio.activo = False
-    bd.commit()
-    return {"mensaje": "Anuncio eliminado"}
+@app.delete("/contenido-informativo/{tipo}/{nivel}/{seccion}")
+def revertir_contenido_informativo(tipo: str, nivel: int, seccion: str, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """Elimina el override y vuelve al contenido original (.md estático)."""
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    row = bd.query(ContenidoInformativo).filter(
+        ContenidoInformativo.tipo == tipo, ContenidoInformativo.nivel == nivel,
+        ContenidoInformativo.seccion == seccion,
+    ).first()
+    if row:
+        bd.delete(row)
+        bd.commit()
+    return {"mensaje": "Contenido restaurado al original"}
 
 
 # ── Recuperación de contraseña ────────────────────────────────────
@@ -1722,7 +1827,7 @@ def iniciar_sesion_ejercicio(
         EntregaEjercicioDocente.ejercicio_id == ejercicio_id,
         EntregaEjercicioDocente.usuario_id == usuario_actual.id,
     ).first()
-    if entrega:
+    if entrega and not entrega.reintento_habilitado:
         raise HTTPException(status_code=409, detail="Ya entregaste este ejercicio")
     sesion = crear_sesion(bd, usuario_actual.id, ej)
     registrar_accion(bd, f"iniciar-ejercicio {ejercicio_id}", "OK", usuario_id=usuario_actual.id)
@@ -1796,6 +1901,8 @@ def pedir_pista_sesion(
             if herramientas else
             "Analiza el contexto del ejercicio y piensa qué herramienta corresponde a este paso."
         )
+    # El texto y el momento quedan registrados para el detalle del docente
+    registrar_pista(bd, sesion, pista)
     return {"pista": pista, "ayudas": sesion.ayudas}
 
 
@@ -1837,6 +1944,7 @@ def listar_entregas_ejercicio(
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
     finalizar_sesiones_vencidas(bd)
+    ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
     entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.ejercicio_id == ejercicio_id).all()
     resultado = []
     for en in entregas:
@@ -1850,9 +1958,141 @@ def listar_entregas_ejercicio(
             "nota": en.nota,
             "comentarios_docente": en.comentarios_docente,
             "ayudas_pedidas": en.ayudas_pedidas or 0,
+            "reintento_habilitado": bool(en.reintento_habilitado),
             "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+            # Resumen estructurado: cierre, porcentajes, tiempo, fases e items,
+            # para la vista de entregas del docente (sin re-parsear texto)
+            "resumen": _resumen_entrega(en),
+            "tiene_detalle": bool(en.detalle),
         })
+    # Una vez vencido el plazo, los estudiantes que nunca rindieron aparecen
+    # como "No entregado" (filas calculadas al vuelo, no se guardan en la BD).
+    if ej and ej.fecha_limite and datetime.now(timezone.utc) > aware_utc(ej.fecha_limite):
+        entregaron = {en.usuario_id for en in entregas}
+        q_faltantes = bd.query(Usuario).filter(Usuario.rol == "estudiante")
+        if entregaron:
+            q_faltantes = q_faltantes.filter(Usuario.id.notin_(entregaron))
+        faltantes = q_faltantes.all()
+        for u in faltantes:
+            resultado.append({
+                "id": None,
+                "ejercicio_id": ejercicio_id,
+                "usuario": u.nombre_usuario,
+                "respuesta": None,
+                "estado": "no_entregado",
+                "nota": None,
+                "comentarios_docente": None,
+                "ayudas_pedidas": 0,
+                "reintento_habilitado": False,
+                "fecha_entrega": None,
+                "resumen": None,
+                "tiene_detalle": False,
+            })
     return resultado
+
+
+@app.get("/ejercicios-docente/entregas/{entrega_id}/detalle")
+def detalle_entrega_ejercicio(
+    entrega_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    """Detalle completo de una entrega para el modal de evaluación del
+    docente: checklist con comando/minuto, línea de tiempo de comandos,
+    pistas recibidas, fases del ataque e informe del estudiante."""
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    en = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.id == entrega_id).first()
+    if not en:
+        raise HTTPException(status_code=404, detail="Entrega no encontrada")
+    u = bd.query(Usuario).filter(Usuario.id == en.usuario_id).first()
+    ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == en.ejercicio_id).first()
+    return {
+        "id": en.id,
+        "usuario": u.nombre_usuario if u else "desconocido",
+        "estado": en.estado,
+        "nota": en.nota,
+        "comentarios_docente": en.comentarios_docente,
+        "ayudas_pedidas": en.ayudas_pedidas or 0,
+        "respuesta": en.respuesta,
+        "reintento_habilitado": bool(en.reintento_habilitado),
+        "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+        "fecha_evaluacion": en.fecha_evaluacion.isoformat() if en.fecha_evaluacion else None,
+        "ejercicio": {
+            "id": ej.id, "titulo": ej.titulo, "tipo": ej.tipo,
+            "nivel": ej.nivel, "tiempo_minutos": ej.tiempo_minutos,
+        } if ej else None,
+        "resumen": _resumen_entrega(en),
+        "detalle": _detalle_entrega(en),
+    }
+
+
+def _feedback_por_reglas(tipo: str, logrados: list, faltan: list, n_pistas: int, pct, cierre: str) -> str:
+    """Orientación de respaldo cuando la IA no está disponible: se arma solo
+    con el checklist registrado, sin inventar nada."""
+    total = len(logrados) + len(faltan)
+    partes = [f"Completaste {len(logrados)} de {total} objetivos del ejercicio."]
+    if faltan:
+        partes.append("Te faltó: " + "; ".join(faltan[:4]) + ".")
+    if n_pistas:
+        partes.append(f"Pediste {n_pistas} pista(s) (−{min(n_pistas*5,30)}%); intenta apoyarte primero en la teoría del nivel.")
+    partes.append("Repasa los pasos pendientes en la sección Información.")
+    return " ".join(partes)
+
+
+def _generar_feedback(ejercicio: EjercicioDocente, det: dict) -> dict:
+    """Orientación de cierre para el ESTUDIANTE (no es la nota). Intenta IA y
+    cae a un resumen por reglas si no hay servicio."""
+    items = det.get("items", []) or []
+    logrados = [i.get("descripcion") for i in items if i.get("completado")]
+    faltan = [i.get("descripcion") for i in items if not i.get("completado")]
+    n_pistas = len(det.get("pistas", []) or [])
+    pct = det.get("porcentaje_final")
+    cierre = det.get("cierre")
+    tipo = ejercicio.tipo if ejercicio else "defensa"
+    rol = "pentester (rol ofensivo)" if tipo == "ataque" else "analista de defensa (SOC)"
+    try:
+        prompt = (
+            f"Eres un instructor de ciberseguridad. Un estudiante en rol de {rol} terminó un ejercicio práctico.\n"
+            f"Objetivos LOGRADOS: {logrados or 'ninguno'}.\n"
+            f"Objetivos NO logrados: {faltan or 'ninguno'}.\n"
+            f"Pistas pedidas: {n_pistas}. Resultado: {pct}%.\n"
+            "Dale retroalimentación breve (máximo 4 líneas), en segunda persona, motivadora pero honesta: "
+            "destaca qué hizo bien y señala concretamente qué mejorar (menciona herramientas o comandos si aplica). "
+            "No inventes datos que no estén arriba. NO le asignes una nota. Responde solo el texto, en español."
+        )
+        r = cliente_openai.chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}],
+            max_tokens=220, temperature=0.5,
+        )
+        return {"texto": r.choices[0].message.content.strip(), "fuente": "ia"}
+    except Exception:
+        return {"texto": _feedback_por_reglas(tipo, logrados, faltan, n_pistas, pct, cierre), "fuente": "reglas"}
+
+
+@app.get("/ejercicios-docente/{ejercicio_id}/mi-feedback")
+def mi_feedback_entrega(
+    ejercicio_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    """Orientación automática de cierre para el propio estudiante. Se genera
+    una vez (IA o reglas) y se cachea en la entrega; no es la calificación."""
+    en = bd.query(EntregaEjercicioDocente).filter(
+        EntregaEjercicioDocente.ejercicio_id == ejercicio_id,
+        EntregaEjercicioDocente.usuario_id == usuario_actual.id,
+    ).first()
+    if not en:
+        raise HTTPException(status_code=404, detail="Aún no tienes una entrega de este ejercicio")
+    det = _detalle_entrega(en) or {}
+    if isinstance(det.get("feedback"), dict) and det["feedback"].get("texto"):
+        return det["feedback"]  # cacheado
+    ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
+    fb = _generar_feedback(ej, det)
+    det["feedback"] = fb
+    en.detalle = json.dumps(det, ensure_ascii=False)
+    bd.commit()
+    return fb
 
 
 @app.get("/docente/estudiante/{nombre_usuario}/entregas")
@@ -1887,7 +2127,11 @@ def listar_entregas_estudiante(
             "nota": en.nota,
             "comentarios_docente": en.comentarios_docente,
             "ayudas_pedidas": en.ayudas_pedidas or 0,
+            "reintento_habilitado": bool(en.reintento_habilitado),
             "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
+            # Resumen estructurado para la vista de perfil del docente
+            "resumen": _resumen_entrega(en),
+            "tiene_detalle": bool(en.detalle),
         })
     return resultado
 
@@ -1903,6 +2147,8 @@ def mis_entregas(
     resultado = []
     for en in entregas:
         ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == en.ejercicio_id).first()
+        det = _detalle_entrega(en) or {}
+        fb = det.get("feedback") if isinstance(det.get("feedback"), dict) else None
         resultado.append({
             "id": en.id,
             "ejercicio_id": en.ejercicio_id,
@@ -1914,6 +2160,8 @@ def mis_entregas(
             "comentarios_docente": en.comentarios_docente,
             "respuesta": en.respuesta,
             "ayudas_pedidas": en.ayudas_pedidas or 0,
+            # Orientación automática de cierre (si ya se generó); para releerla
+            "feedback": fb.get("texto") if fb else None,
             "fecha_entrega": en.fecha_entrega.isoformat() if en.fecha_entrega else None,
             "fecha_evaluacion": en.fecha_evaluacion.isoformat() if en.fecha_evaluacion else None,
         })
@@ -1938,7 +2186,27 @@ def evaluar_entrega_ejercicio(
     entrega.nota = datos.nota
     entrega.comentarios_docente = datos.comentarios
     entrega.estado = "evaluado"
+    entrega.reintento_habilitado = False  # evaluar cancela un reintento pendiente
     entrega.fecha_evaluacion = datetime.now(timezone.utc)
     bd.commit()
 
     return {"mensaje": "Entrega evaluada"}
+
+
+@app.post("/ejercicios-docente/entregas/{entrega_id}/reabrir")
+def reabrir_entrega_ejercicio(
+    entrega_id: int,
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),
+    bd: Session = Depends(obtener_bd),
+):
+    """El docente habilita un nuevo intento: el estudiante puede volver a
+    rendir el ejercicio y su nueva entrega reemplazará a esta (la nota actual
+    se conserva hasta que vuelva a rendir)."""
+    if usuario_actual.rol not in ("docente", "admin"):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    entrega = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.id == entrega_id).first()
+    if not entrega:
+        raise HTTPException(status_code=404, detail="Entrega no encontrada")
+    entrega.reintento_habilitado = True
+    bd.commit()
+    return {"mensaje": "Nuevo intento habilitado para el estudiante"}

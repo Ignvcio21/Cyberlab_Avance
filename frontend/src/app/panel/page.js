@@ -108,7 +108,7 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
         <div style={{ flex:1 }}>
           <div className="perfil-detalle-nombre">{nombreEstudiante}</div>
           <div className="perfil-detalle-sub">
-            {entregas.length} entregas · {intentos.length} intentos terminal · 7 niveles
+            {entregas.length} entregas · 7 niveles
           </div>
         </div>
         {/* Nota general + mini-stats del alumno */}

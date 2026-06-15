@@ -14,8 +14,6 @@ from sqlalchemy.exc import IntegrityError
 
 from .models import (
     Usuario, Evento, Alerta, IpBloqueada, AccionUsuario,
-    EscenarioActivoUsuario, EscenarioInstancia, VariableInstancia,
-    BloqueoEscenario,
 )
 from .sesiones import ips_maliciosas
 
@@ -55,16 +53,6 @@ def _desbloquear_ip(bd: Session, usuario_id: int, ip: str) -> bool:
         bd.delete(existe); bd.commit()
         return True
     return False
-
-
-def obtener_instancia_activa_usuario(bd: Session, usuario_id: int):
-    rel = bd.query(EscenarioActivoUsuario).filter(
-        EscenarioActivoUsuario.usuario_id == usuario_id
-    ).first()
-    if not rel:
-        return None, None
-    inst = bd.query(EscenarioInstancia).filter(EscenarioInstancia.id == rel.instancia_id).first()
-    return rel, inst
 
 
 # ── Registro y despachador (patrón Command) ───────────────────────
@@ -139,15 +127,7 @@ def atk_ls(bd, usuario, m, ctx):
 
 @comando(r"^(ip a|ip addr|ifconfig)$", REGISTRO_ATAQUE)
 def atk_ip_a(bd, usuario, m, ctx):
-    _, inst_activa = obtener_instancia_activa_usuario(bd, usuario.id)
-    ip_atacante = None
-    if inst_activa:
-        var_ip = bd.query(VariableInstancia).filter(VariableInstancia.instancia_id == inst_activa.id, VariableInstancia.clave == "ip_atacante").first()
-        if var_ip: ip_atacante = var_ip.valor
-    salida = "1: lo: <LOOPBACK,UP> mtu 65536\n   inet 127.0.0.1/8\n2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500\n   inet 192.168.1.10/24 brd 192.168.1.255"
-    if ip_atacante:
-        salida += f"\n\n[IDS] Fuente marcada como sospechosa: {ip_atacante}"
-    return salida
+    return "1: lo: <LOOPBACK,UP> mtu 65536\n   inet 127.0.0.1/8\n2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500\n   inet 192.168.1.10/24 brd 192.168.1.255"
 
 
 @comando(r"^history$", REGISTRO_ATAQUE)
@@ -160,8 +140,7 @@ def atk_history(bd, usuario, m, ctx):
 @comando(r"^status$", REGISTRO_ATAQUE)
 def atk_status(bd, usuario, m, ctx):
     total_e = q_eventos(bd, usuario.id).count(); total_a = q_alertas(bd, usuario.id).count()
-    _, inst = obtener_instancia_activa_usuario(bd, usuario.id)
-    bloq = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id).count() if inst else 0
+    bloq = q_bloqueadas(bd, usuario.id).count()
     estado = "BAJO ATAQUE" if total_a >= 2 else "OPERATIVO"
     return f"● Sistema: {estado}\n  Eventos registrados : {total_e}\n  Alertas activas     : {total_a}\n  IPs bloqueadas      : {bloq}"
 
@@ -188,15 +167,8 @@ def atk_show_events(bd, usuario, m, ctx):
 
 @comando(r"^show blocked$", REGISTRO_ATAQUE)
 def atk_show_blocked(bd, usuario, m, ctx):
-    _, inst = obtener_instancia_activa_usuario(bd, usuario.id)
-    ips = []
-    if inst:
-        ips = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id).all()
-    if not ips:
-        # Fallback: bloqueos del firewall del propio usuario
-        ips_glob = q_bloqueadas(bd, usuario.id).order_by(IpBloqueada.id.desc()).limit(10).all()
-        if not ips_glob: return "No hay IPs bloqueadas."
-        return "IPs BLOQUEADAS:\n" + "\n".join(f"  DROP  {ip.direccion_ip}  # {ip.motivo}" for ip in ips_glob)
+    ips = q_bloqueadas(bd, usuario.id).order_by(IpBloqueada.id.desc()).limit(10).all()
+    if not ips: return "No hay IPs bloqueadas."
     return "IPs BLOQUEADAS:\n" + "\n".join(f"  DROP  {ip.direccion_ip}  # {ip.motivo}" for ip in ips)
 
 
@@ -320,10 +292,6 @@ def atk_export_report(bd, usuario, m, ctx):
 @comando(r"^block ip (\S+)$", REGISTRO_ATAQUE)
 def atk_block_ip(bd, usuario, m, ctx):
     ip_txt = m.group(1)
-    _, inst = obtener_instancia_activa_usuario(bd, usuario.id)
-    if inst:
-        if not bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_txt).first():
-            bd.add(BloqueoEscenario(escenario_id=inst.id, direccion_ip=ip_txt, motivo="Manual block")); bd.commit()
     _bloquear_ip(bd, usuario.id, ip_txt, "Manual block")
     return f"iptables -A INPUT -s {ip_txt} -j DROP\n→ {ip_txt} bloqueada correctamente."
 
@@ -331,10 +299,6 @@ def atk_block_ip(bd, usuario, m, ctx):
 @comando(r"^unblock ip (\S+)$", REGISTRO_ATAQUE)
 def atk_unblock_ip(bd, usuario, m, ctx):
     ip_txt = m.group(1)
-    _, inst = obtener_instancia_activa_usuario(bd, usuario.id)
-    if inst:
-        bloq = bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_txt).first()
-        if bloq: bd.delete(bloq); bd.commit()
     if _desbloquear_ip(bd, usuario.id, ip_txt):
         return f"iptables -D INPUT -s {ip_txt} -j DROP\n→ {ip_txt} desbloqueada."
     return f"{ip_txt} no estaba bloqueada."
@@ -534,10 +498,6 @@ def def_tcpdump(bd, usuario, m, ctx):
 @comando(r"^iptables .*-a .*-s (\S+).*drop.*$", REGISTRO_DEFENSA)
 def def_iptables_block(bd, usuario, m, ctx):
     ip_obj = m.group(1)
-    _, inst = obtener_instancia_activa_usuario(bd, usuario.id)
-    if inst:
-        if not bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id, BloqueoEscenario.direccion_ip == ip_obj).first():
-            bd.add(BloqueoEscenario(escenario_id=inst.id, direccion_ip=ip_obj, motivo="iptables DROP rule")); bd.commit()
     _bloquear_ip(bd, usuario.id, ip_obj, f"iptables -A INPUT -s {ip_obj} -j DROP")
     return f"# regla DROP aplicada para {ip_obj}\n# iptables -L INPUT -n para verificar"
 

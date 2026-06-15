@@ -24,10 +24,7 @@ from openai import OpenAI
 from .database import SesionLocal, engine, Base
 from .models import (
     Usuario, Evento, Alerta, IpBloqueada, AccionUsuario,
-    Curso, Capitulo, Leccion, Ejercicio, ProgresoUsuario,
-    IntentoEjercicio, EvaluacionDocente,
-    PlantillaEscenario, VariablePlantilla, EscenarioInstancia, VariableInstancia,
-    EscenarioActivoUsuario, BloqueoEscenario,
+    Curso, Capitulo, Leccion, ProgresoUsuario,
     EjercicioDocente, ItemEjercicioDocente, EntregaEjercicioDocente,
     SesionEjercicio, ContenidoInformativo,
 )
@@ -41,7 +38,6 @@ from .sesiones import (
 )
 from .terminal_comandos import (
     REGISTRO_ATAQUE, REGISTRO_DEFENSA, ALIAS_ATAQUE, despachar,
-    obtener_instancia_activa_usuario,
     q_eventos as _q_eventos, q_alertas as _q_alertas,
 )
 from .schemas import (
@@ -255,48 +251,6 @@ def _enriquecer_ia(narrativa_base: str, variables: dict, tipo: str) -> str:
         return narrativa_base
 
 
-def crear_nuevo_escenario(bd: Session, usuario: Usuario, ejercicio_id: int, plantillas_data: list):
-    rel, inst_anterior = obtener_instancia_activa_usuario(bd, usuario.id)
-    if inst_anterior and inst_anterior.estado == "activo":
-        inst_anterior.estado = "cerrado"
-        bd.commit()
-
-    pd = random.choice(plantillas_data)
-    plantilla = bd.query(PlantillaEscenario).filter(PlantillaEscenario.nombre == pd["nombre"]).first()
-    if not plantilla:
-        raise HTTPException(status_code=500, detail=f"Plantilla no encontrada: {pd['nombre']}")
-
-    defs = bd.query(VariablePlantilla).filter(VariablePlantilla.plantilla_id == plantilla.id).all()
-    vars_val = {}
-    regla_fn = {
-        "ip_privada": _ip, "usuario_comun": _usuario,
-        "servicio_comun": _servicio, "puertos_comunes": _puertos, "empresa": _empresa,
-    }
-    for v in defs:
-        fn = regla_fn.get(v.regla)
-        vars_val[v.clave] = fn() if fn else "N/D"
-
-    narrativa_base  = _render(pd["narrativa"], vars_val)
-    narrativa_final = _enriquecer_ia(narrativa_base, vars_val, plantilla.tipo)
-
-    inst = EscenarioInstancia(
-        plantilla_id=plantilla.id, ejercicio_id=ejercicio_id,
-        usuario_id=usuario.id,
-        titulo_caso=f"Caso activo: {pd['nombre']}",
-        texto_caso=narrativa_final, estado="activo"
-    )
-    bd.add(inst); bd.commit(); bd.refresh(inst)
-    bd.add_all([VariableInstancia(instancia_id=inst.id, clave=k, valor=str(v)) for k, v in vars_val.items()])
-    bd.commit()
-
-    if rel:
-        rel.instancia_id = inst.id; bd.commit()
-    else:
-        bd.add(EscenarioActivoUsuario(usuario_id=usuario.id, instancia_id=inst.id)); bd.commit()
-
-    return inst, vars_val
-
-
 # ── Siembra de contenido ──────────────────────────────────────────
 
 def sembrar_contenido_si_falta(bd: Session):
@@ -361,61 +315,9 @@ def sembrar_contenido_si_falta(bd: Session):
             ))
         bd.commit()
 
-    # ── Ejercicios ataque ──
-    cap1 = bd.query(Capitulo).filter(Capitulo.curso_id == curso_ataque.id, Capitulo.orden == 1).first()
-    lec1 = bd.query(Leccion).filter(Leccion.capitulo_id == cap1.id).order_by(Leccion.orden.desc()).first()
-    for i in range(1, 6):
-        bd.add(Ejercicio(leccion_id=lec1.id, descripcion=f"Práctica Fuerza Bruta #{i}: análisis y contención (variante {i})", tipo="ataque", comandos_objetivo=10, tiempo_limite_seg=300))
-    bd.commit()
-
-    cap2 = bd.query(Capitulo).filter(Capitulo.curso_id == curso_ataque.id, Capitulo.orden == 2).first()
-    lec2 = bd.query(Leccion).filter(Leccion.capitulo_id == cap2.id).order_by(Leccion.orden.desc()).first()
-    for i in range(1, 6):
-        bd.add(Ejercicio(leccion_id=lec2.id, descripcion=f"Práctica Escaneo de Puertos #{i}: detección y respuesta (variante {i})", tipo="defensa", comandos_objetivo=10, tiempo_limite_seg=300))
-    bd.commit()
-
-    # ── Ejercicios defensa ──
-    for orden_cap in range(1, 8):
-        cap_def = bd.query(Capitulo).filter(Capitulo.curso_id == curso_defensa.id, Capitulo.orden == orden_cap).first()
-        lec_def = bd.query(Leccion).filter(Leccion.capitulo_id == cap_def.id).order_by(Leccion.orden.desc()).first()
-        for i in range(1, 6):
-            bd.add(Ejercicio(
-                leccion_id=lec_def.id,
-                descripcion=f"Defensa Nivel {orden_cap} — Ejercicio {i}: análisis SOC y respuesta",
-                tipo="defensa_soc",
-                comandos_objetivo=8,
-                tiempo_limite_seg=360
-            ))
-        bd.commit()
-
-
-def seed_plantillas(bd: Session):
-    if bd.query(PlantillaEscenario).count() > 0:
-        return
-
-    ejs_fb = bd.query(Ejercicio).filter(Ejercicio.tipo == "ataque").limit(1).first()
-    ejs_ep = bd.query(Ejercicio).filter(Ejercicio.tipo == "defensa").limit(1).first()
-    id_fb = ejs_fb.id if ejs_fb else 1
-    id_ep = ejs_ep.id if ejs_ep else 2
-
-    for pd in PLANTILLAS_FB:
-        plant = PlantillaEscenario(ejercicio_id=id_fb, nombre=pd["nombre"], tipo="fuerza_bruta", narrativa_base=pd["narrativa"], activo=True)
-        bd.add(plant); bd.commit(); bd.refresh(plant)
-        bd.add_all([
-            VariablePlantilla(plantilla_id=plant.id, clave="ip_atacante",      descripcion="IP origen",       regla="ip_privada"),
-            VariablePlantilla(plantilla_id=plant.id, clave="usuario_objetivo", descripcion="Cuenta objetivo", regla="usuario_comun"),
-            VariablePlantilla(plantilla_id=plant.id, clave="servicio",         descripcion="Servicio atacado",regla="servicio_comun"),
-            VariablePlantilla(plantilla_id=plant.id, clave="empresa",          descripcion="Empresa ficticia",regla="empresa"),
-        ]); bd.commit()
-
-    for pd in PLANTILLAS_EP:
-        plant = PlantillaEscenario(ejercicio_id=id_ep, nombre=pd["nombre"], tipo="escaneo_puertos", narrativa_base=pd["narrativa"], activo=True)
-        bd.add(plant); bd.commit(); bd.refresh(plant)
-        bd.add_all([
-            VariablePlantilla(plantilla_id=plant.id, clave="ip_atacante", descripcion="IP origen",         regla="ip_privada"),
-            VariablePlantilla(plantilla_id=plant.id, clave="puertos",     descripcion="Puertos escaneados", regla="puertos_comunes"),
-            VariablePlantilla(plantilla_id=plant.id, clave="empresa",     descripcion="Empresa ficticia",   regla="empresa"),
-        ]); bd.commit()
+    # Los ejercicios que rinde el estudiante son los que crea el docente
+    # (tabla ejercicios_docente). Las tablas de contenido (cursos/capitulos/
+    # lecciones) solo sostienen el progreso de lectura de la teoría.
 
 
 # ── Startup ───────────────────────────────────────────────────────
@@ -541,7 +443,6 @@ def iniciar_sistema():
     except Exception:
         bd.rollback()
     sembrar_contenido_si_falta(bd)
-    seed_plantillas(bd)
     bd.close()
 
 
@@ -663,32 +564,13 @@ def admin_eliminar_usuario(
     bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == uid).update({"usuario_id": None})
     bd.query(Curso).filter(Curso.creado_por_usuario_id == uid).update({"creado_por_usuario_id": None})
 
-    # 2. Eliminar evaluaciones donde este usuario es docente
-    bd.query(EvaluacionDocente).filter(EvaluacionDocente.docente_id == uid).delete()
-
-    # 3. Eliminar evaluaciones ligadas a sus intentos
-    for it in bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == uid).all():
-        bd.query(EvaluacionDocente).filter(EvaluacionDocente.intento_id == it.id).delete()
-
-    # 4. Eliminar intentos
-    bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == uid).delete()
-
-    # 5. Eliminar progreso de lecciones
+    # 2. Eliminar progreso de lecciones
     bd.query(ProgresoUsuario).filter(ProgresoUsuario.usuario_id == uid).delete()
 
-    # 6. Eliminar escenario activo
-    bd.query(EscenarioActivoUsuario).filter(EscenarioActivoUsuario.usuario_id == uid).delete()
-
-    # 7. Eliminar variables, bloqueos de instancias y luego instancias
-    for inst in bd.query(EscenarioInstancia).filter(EscenarioInstancia.usuario_id == uid).all():
-        bd.query(VariableInstancia).filter(VariableInstancia.instancia_id == inst.id).delete()
-        bd.query(BloqueoEscenario).filter(BloqueoEscenario.escenario_id == inst.id).delete()
-    bd.query(EscenarioInstancia).filter(EscenarioInstancia.usuario_id == uid).delete()
-
-    # 8. Eliminar entregas de ejercicios docente
+    # 3. Eliminar entregas de ejercicios docente
     bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == uid).delete()
 
-    # 9. Eliminar el usuario
+    # 4. Eliminar el usuario
     bd.delete(u)
     bd.commit()
 
@@ -720,32 +602,7 @@ def admin_crear_leccion(datos: SolicitudCrearLeccion, usuario_actual: Usuario = 
     return {"mensaje": "Lección creada", "leccion_id": lec.id}
 
 
-@app.post("/admin/ejercicio")
-def admin_crear_ejercicio(datos: SolicitudCrearEjercicio, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
-    if not bd.query(Leccion).filter(Leccion.id == datos.leccion_id).first():
-        raise HTTPException(status_code=404, detail="Lección no encontrada")
-    ej = Ejercicio(leccion_id=datos.leccion_id, descripcion=datos.descripcion, tipo=datos.tipo, comandos_objetivo=datos.comandos_objetivo, tiempo_limite_seg=datos.tiempo_limite_seg)
-    bd.add(ej); bd.commit(); bd.refresh(ej)
-    return {"mensaje": "Ejercicio creado", "ejercicio_id": ej.id}
-
-
-# ── Estructura y progreso ─────────────────────────────────────────
-
-@app.get("/contenido/estructura", response_model=EstructuraSalida)
-def obtener_estructura(bd: Session = Depends(obtener_bd)):
-    cursos = bd.query(Curso).order_by(Curso.id.asc()).all()
-    salida = []
-    for c in cursos:
-        caps = []
-        for cap in bd.query(Capitulo).filter(Capitulo.curso_id == c.id).order_by(Capitulo.orden.asc()).all():
-            lecs = []
-            for lec in bd.query(Leccion).filter(Leccion.capitulo_id == cap.id).order_by(Leccion.orden.asc()).all():
-                ejs = bd.query(Ejercicio).filter(Ejercicio.leccion_id == lec.id).order_by(Ejercicio.id.asc()).all()
-                lecs.append({"id": lec.id, "titulo": lec.titulo, "tipo": lec.tipo, "orden": lec.orden, "ruta_contenido": lec.ruta_contenido,
-                             "ejercicios": [{"id": e.id, "descripcion": e.descripcion, "tipo": e.tipo, "comandos_objetivo": e.comandos_objetivo, "tiempo_limite_seg": e.tiempo_limite_seg} for e in ejs]})
-            caps.append({"id": cap.id, "titulo": cap.titulo, "orden": cap.orden, "lecciones": lecs})
-        salida.append({"id": c.id, "titulo": c.titulo, "descripcion": c.descripcion, "nivel": c.nivel, "activo": c.activo, "capitulos": caps})
-    return {"cursos": salida}
+# ── Progreso de lectura ───────────────────────────────────────────
 
 
 @app.post("/progreso/actualizar")
@@ -947,27 +804,9 @@ def docente_listar_entregas(usuario_actual: Usuario = Depends(solo_docente), bd:
 
 @app.get("/docente/intentos")
 def docente_listar_intentos(usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
-    intentos = bd.query(IntentoEjercicio).order_by(IntentoEjercicio.id.desc()).limit(200).all()
-    salida = []
-    for it in intentos:
-        u  = bd.query(Usuario).filter(Usuario.id == it.usuario_id).first()
-        ej = bd.query(Ejercicio).filter(Ejercicio.id == it.ejercicio_id).first()
-        from datetime import datetime, timezone
-        fecha_fin_ref = it.fecha_fin or datetime.now(timezone.utc)
-        ayudas = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == it.usuario_id, AccionUsuario.comando == "pedir-ayuda", AccionUsuario.fecha_creacion >= it.fecha_inicio, AccionUsuario.fecha_creacion <= fecha_fin_ref).count()
-        salida.append({
-            "intento_id": it.id, "usuario": u.nombre_usuario if u else None,
-            "ejercicio_id": it.ejercicio_id, "estado": it.estado,
-            "porcentaje": it.porcentaje, "tiempo_seg": it.tiempo_seg,
-            "errores": it.errores, "ayudas_pedidas": ayudas,
-            "tiene_evaluacion": it.evaluacion is not None,
-            "nota": it.evaluacion.nota if it.evaluacion else None,
-            "comentarios": it.evaluacion.comentarios if it.evaluacion else None,
-            "descripcion_ejercicio": ej.descripcion if ej else None,
-            "fecha_inicio": it.fecha_inicio.isoformat() if it.fecha_inicio else None,
-            "fecha_fin": it.fecha_fin.isoformat() if it.fecha_fin else None,
-        })
-    return {"intentos": salida}
+    # Sistema de intentos histórico descontinuado: las evaluaciones vigentes
+    # viven en entregas_ejercicio_docente (ver /docente/entregas).
+    return {"intentos": []}
 
 
 @app.get("/mis-entregas-docente")
@@ -983,97 +822,20 @@ def mis_entregas_docente(usuario_actual: Usuario = Depends(obtener_usuario_actua
 
 @app.get("/mis-evaluaciones")
 def mis_evaluaciones(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    intentos = bd.query(IntentoEjercicio).filter(IntentoEjercicio.usuario_id == usuario_actual.id).order_by(IntentoEjercicio.id.desc()).all()
-    salida = []
-    for it in intentos:
-        ej = bd.query(Ejercicio).filter(Ejercicio.id == it.ejercicio_id).first()
-        from datetime import datetime, timezone
-        fecha_fin_ref = it.fecha_fin or datetime.now(timezone.utc)
-        ayudas = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == it.usuario_id, AccionUsuario.comando == "pedir-ayuda", AccionUsuario.fecha_creacion >= it.fecha_inicio, AccionUsuario.fecha_creacion <= fecha_fin_ref).count()
-        eval_data = None
-        if it.evaluacion:
-            eval_data = {"nota": it.evaluacion.nota, "comentarios": it.evaluacion.comentarios, "fecha": it.evaluacion.fecha.isoformat() if it.evaluacion.fecha else None}
-        salida.append({"intento_id": it.id, "ejercicio_id": it.ejercicio_id, "descripcion_ejercicio": ej.descripcion if ej else None, "estado": it.estado, "porcentaje": it.porcentaje, "tiempo_seg": it.tiempo_seg, "errores": it.errores, "ayudas_pedidas": ayudas, "fecha_inicio": it.fecha_inicio.isoformat() if it.fecha_inicio else None, "evaluacion": eval_data})
-    return {"intentos": salida}
+    # Sistema de intentos histórico descontinuado (ver /mis-entregas-docente).
+    return {"intentos": []}
 
 
 @app.post("/docente/evaluar")
 def docente_evaluar_intento(datos: SolicitudEvaluarIntento, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
-    intento = bd.query(IntentoEjercicio).filter(IntentoEjercicio.id == datos.intento_id).first()
-    if not intento: raise HTTPException(status_code=404, detail="Intento no encontrado")
-    existente = bd.query(EvaluacionDocente).filter(EvaluacionDocente.intento_id == intento.id).first()
-    if existente:
-        existente.nota = float(datos.nota); existente.comentarios = datos.comentarios; bd.commit()
-        return {"mensaje": "Evaluación actualizada"}
-    bd.add(EvaluacionDocente(intento_id=intento.id, docente_id=usuario_actual.id, nota=float(datos.nota), comentarios=datos.comentarios))
-    bd.commit()
-    return {"mensaje": "Evaluación creada"}
+    # Sistema de intentos histórico descontinuado: la evaluación vigente se
+    # realiza sobre las entregas (ver /ejercicios-docente/entregas/{id}/evaluar).
+    raise HTTPException(status_code=410, detail="El sistema de intentos fue descontinuado; evalúa desde las entregas.")
 
 
-# ── Simulaciones ──────────────────────────────────────────────────
-
-@app.post("/simular/fuerza-bruta")
-@limiter.limit("30/minute")
-def simular_fuerza_bruta(request: Request, body: SolicitudSimular, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    ejercicios = bd.query(Ejercicio).filter(Ejercicio.tipo == "ataque").all()
-    if not ejercicios: raise HTTPException(status_code=500, detail="Sin ejercicios de tipo ataque")
-    ejercicio = random.choice(ejercicios)
-    inst, vars_val = crear_nuevo_escenario(bd, usuario_actual, ejercicio.id, PLANTILLAS_FB)
-    ip = vars_val.get("ip_atacante", "192.168.1.100")
-    servicio = vars_val.get("servicio", "ssh")
-    usuario_objetivo = vars_val.get("usuario_objetivo", "admin")
-    for i in range(1, 11):
-        bd.add(Evento(tipo_evento="Fuerza Bruta", ip_origen=ip, usuario_id=usuario_actual.id, descripcion=f"Intento fallido #{i} en {servicio} contra cuenta '{usuario_objetivo}'"))
-    bd.commit()
-    total = _q_eventos(bd, usuario_actual.id).filter(Evento.ip_origen == ip, Evento.tipo_evento == "Fuerza Bruta").count()
-    if total >= 5:
-        bd.add(Alerta(titulo="Ataque de fuerza bruta detectado", severidad="Alta", usuario_id=usuario_actual.id, descripcion=f"{total} intentos fallidos desde {ip} en {servicio} (cuenta: {usuario_objetivo})"))
-        bd.commit()
-    registrar_accion(bd, "simular fuerza-bruta", "OK", usuario_id=usuario_actual.id)
-    return {"mensaje": f"Simulación ejecutada — {total} intentos detectados desde {ip}", "tipo_ataque": "Fuerza Bruta", "ip": ip, "ejercicio_id": ejercicio.id, "id": inst.id, "plantilla_id": inst.plantilla_id, "titulo_caso": inst.titulo_caso, "texto_caso": inst.texto_caso, "variables": [{"clave": k, "valor": v} for k, v in vars_val.items()], "siguiente_paso": "Usa 'show alerts' para comenzar el análisis."}
-
-
-@app.post("/simular/escaneo-puertos")
-@limiter.limit("30/minute")
-def simular_escaneo_puertos(request: Request, body: SolicitudSimular, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    ejercicios = bd.query(Ejercicio).filter(Ejercicio.tipo == "defensa").all()
-    if not ejercicios: raise HTTPException(status_code=500, detail="Sin ejercicios de tipo defensa")
-    ejercicio = random.choice(ejercicios)
-    inst, vars_val = crear_nuevo_escenario(bd, usuario_actual, ejercicio.id, PLANTILLAS_EP)
-    ip = vars_val.get("ip_atacante", "192.168.1.100")
-    puertos = vars_val.get("puertos", "22, 80, 443")
-    for puerto in puertos.replace(" ", "").split(","):
-        bd.add(Evento(tipo_evento="Escaneo de Puertos", ip_origen=ip, usuario_id=usuario_actual.id, descripcion=f"Sonda detectada en puerto {puerto.strip()} desde {ip}"))
-    bd.commit()
-    total = _q_eventos(bd, usuario_actual.id).filter(Evento.ip_origen == ip, Evento.tipo_evento == "Escaneo de Puertos").count()
-    if total >= 3:
-        bd.add(Alerta(titulo="Reconocimiento de red detectado", severidad="Media", usuario_id=usuario_actual.id, descripcion=f"Escaneo de puertos ({puertos}) detectado desde {ip}"))
-        bd.commit()
-    registrar_accion(bd, "simular escaneo-puertos", "OK", usuario_id=usuario_actual.id)
-    return {"mensaje": f"Simulación ejecutada — escaneo en puertos {puertos} desde {ip}", "tipo_ataque": "Escaneo de Puertos", "ip": ip, "ejercicio_id": ejercicio.id, "id": inst.id, "plantilla_id": inst.plantilla_id, "titulo_caso": inst.titulo_caso, "texto_caso": inst.texto_caso, "variables": [{"clave": k, "valor": v} for k, v in vars_val.items()], "siguiente_paso": "Usa 'show alerts' para comenzar el análisis."}
-
-
-# ── Ayuda ─────────────────────────────────────────────────────────
-
-@app.post("/escenario/pedir-ayuda")
-@limiter.limit("20/minute")
-def pedir_ayuda(request: Request, body: dict, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    _, inst = obtener_instancia_activa_usuario(bd, usuario_actual.id)
-    if not inst: raise HTTPException(status_code=404, detail="No hay escenario activo")
-    registrar_accion(bd, "pedir-ayuda", f"escenario_id={inst.id}", usuario_id=usuario_actual.id)
-    total_ayudas = bd.query(AccionUsuario).filter(AccionUsuario.usuario_id == usuario_actual.id, AccionUsuario.comando == "pedir-ayuda").count()
-    vars_inst = {v.clave: v.valor for v in bd.query(VariableInstancia).filter(VariableInstancia.instancia_id == inst.id).all()}
-    ip = vars_inst.get("ip_atacante", "?")
-    hints = [
-        "Pista 1: Comienza revisando las alertas del sistema con → show alerts",
-        "Pista 2: Luego revisa el detalle de los eventos con → show events",
-        f"Pista 3: Identifica la IP atacante en los eventos y bloquéala con → block ip {ip}",
-        "Pista 4: Verifica el bloqueo activo con → show blocked",
-        f"Pista 5: La IP atacante en este escenario es {ip}. Usa → block ip {ip}",
-    ]
-    hint = hints[min(total_ayudas - 1, len(hints) - 1)]
-    penalizacion = min(total_ayudas * 5, 30)
-    return {"hint": hint, "veces_pedida": total_ayudas, "penalizacion_porcentaje": penalizacion, "mensaje": f"Ayuda #{total_ayudas} solicitada. Penalización acumulada: -{penalizacion}%"}
+# Las simulaciones y la ayuda por escenario (sistema viejo) fueron retiradas:
+# el flujo vigente siembra el laboratorio desde la sesión del ejercicio docente
+# (sesiones.py) y las pistas se piden en /ejercicios-docente/sesion/pista.
 
 
 # ── Estadísticas ──────────────────────────────────────────────────
@@ -1143,10 +905,6 @@ def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Sess
 
     # ── Todo lo demás → OpenAI con contexto real ─────────────────
     try:
-        _, inst_activa = obtener_instancia_activa_usuario(bd, usuario_actual.id)
-        contexto_escenario = ""
-        if inst_activa:
-            contexto_escenario = f"Escenario activo: {inst_activa.titulo_caso}\n"
         contexto_real = _construir_contexto_real(bd, usuario_actual.id)
 
         ai_resp = cliente_openai.chat.completions.create(
@@ -1162,7 +920,6 @@ def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Sess
                         "Responde SOLO con la salida del terminal, sin explicaciones ni comentarios fuera de la salida. "
                         "Máximo 25 líneas. Formato realista de terminal Linux. "
                         "Si el comando no existe o falla, responde con el error exacto que daría bash/Kali.\n\n"
-                        + contexto_escenario
                         + contexto_real
                     )
                 },

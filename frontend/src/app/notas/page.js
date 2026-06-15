@@ -18,13 +18,6 @@ const NOMBRES_NIVELES = {
   },
 }
 
-// Nombres del sistema histórico de intentos (solo para datos antiguos)
-const NOMBRES_NIVELES_HIST = {
-  1: "Fuerza Bruta — Fundamentos", 2: "Escaneo de Puertos", 3: "Enumeración de Servicios",
-  4: "Superficie de Ataque", 5: "Fuerza Bruta Avanzada", 6: "Ataque Multi-Etapa", 7: "Operación Completa",
-}
-const nivelDeEjercicio = (ejercicio_id) => ejercicio_id ? Math.ceil(ejercicio_id / 5) : null
-
 const formatFecha = (str) => {
   if (!str) return "—"
   try {
@@ -161,9 +154,7 @@ export default function PaginaNotas() {
   const router = useRouter()
   const [nombreUsuario, setNombreUsuario] = useState("")
   const [entregas,      setEntregas]      = useState([])
-  const [intentos,      setIntentos]      = useState([])   // histórico
   const [cargando,      setCargando]      = useState(true)
-  const [verHistorial,  setVerHistorial]  = useState(false)
   const [nivelAbierto,  setNivelAbierto]  = useState(null)
   const [orden,         setOrden]         = useState("reciente")  // reciente | antiguo | nombre
 
@@ -177,15 +168,10 @@ export default function PaginaNotas() {
     if (!nombreUsuario) return
     setCargando(true)
     const headers = { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` }
-    Promise.all([
-      fetch(`${API_URL}/ejercicios-docente/mis-entregas/todas`, { headers })
-        .then(r => r.json()).catch(() => []),
-      fetch(`${API_URL}/mis-evaluaciones?nombre_usuario=${encodeURIComponent(nombreUsuario)}`, { headers })
-        .then(r => r.json()).catch(() => null),
-    ]).then(([ent, hist]) => {
-      setEntregas(Array.isArray(ent) ? ent : [])
-      setIntentos(Array.isArray(hist) ? hist : (hist?.intentos || []))
-    }).finally(() => setCargando(false))
+    fetch(`${API_URL}/ejercicios-docente/mis-entregas/todas`, { headers })
+      .then(r => r.json()).catch(() => [])
+      .then(ent => setEntregas(Array.isArray(ent) ? ent : []))
+      .finally(() => setCargando(false))
   }, [nombreUsuario])
 
   const ordenar = (lista, campoFecha, campoNombre = "titulo") => {
@@ -218,15 +204,6 @@ export default function PaginaNotas() {
   const promedio     = evaluadas.length
     ? (evaluadas.reduce((s, e) => s + e.nota, 0) / evaluadas.length).toFixed(1)
     : null
-
-  // ── Histórico agrupado por nivel (sistema antiguo) ──
-  const porNivelHist = {}
-  intentos.forEach(it => {
-    const n = nivelDeEjercicio(it.ejercicio_id) || 1
-    if (!porNivelHist[n]) porNivelHist[n] = []
-    porNivelHist[n].push(it)
-  })
-  const nivelesHist = Object.keys(porNivelHist).map(Number).sort((a, b) => a - b)
 
   return (
     <GuardSesion>
@@ -354,65 +331,6 @@ export default function PaginaNotas() {
                   </div>
                 )
               })}
-            </section>
-          )}
-
-          {/* ── Historial del sistema anterior (si existe) ── */}
-          {!cargando && intentos.length > 0 && (
-            <section className="panel" style={{ padding:0, overflow:"hidden" }}>
-              <button
-                onClick={() => setVerHistorial(v => !v)}
-                style={{
-                  width:"100%", textAlign:"left", background:"none", border:"none",
-                  padding:"14px 20px", cursor:"pointer", color:"var(--texto-apagado)",
-                  display:"flex", justifyContent:"space-between", alignItems:"center", fontSize:13,
-                }}
-              >
-                <span>📦 Historial de evaluaciones anteriores ({intentos.length})</span>
-                <span>{verHistorial ? "▲" : "▼"}</span>
-              </button>
-              {verHistorial && (
-                <div style={{ padding:"0 20px 16px", display:"flex", flexDirection:"column", gap:10 }}>
-                  {nivelesHist.map(n => (
-                    <div key={n}>
-                      <div style={{ fontSize:12, fontWeight:700, color:"var(--texto-apagado)", fontFamily:"var(--mono)", margin:"8px 0 6px" }}>
-                        Nivel {n} — {NOMBRES_NIVELES_HIST[n] || ""}
-                      </div>
-                      {ordenar(porNivelHist[n], "fecha_inicio", "descripcion_ejercicio").map(it => (
-                        <div key={it.intento_id} style={{
-                          background:"rgba(255,255,255,0.03)",
-                          border:"1px solid rgba(255,255,255,0.07)",
-                          borderRadius:10, padding:"10px 14px", marginBottom:6,
-                          display:"flex", justifyContent:"space-between", alignItems:"center", gap:10,
-                        }}>
-                          <div>
-                            <div style={{ fontSize:13, fontWeight:600, color:"#ddd" }}>
-                              {it.descripcion_ejercicio || `Ejercicio #${it.ejercicio_id}`}
-                            </div>
-                            <div style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)", marginTop:2 }}>
-                              🕐 {formatFecha(it.fecha_inicio)} · 📊 {it.porcentaje}% · ⏱ {it.tiempo_seg}s
-                            </div>
-                            {it.evaluacion?.comentarios && (
-                              <div style={{ fontSize:12, color:"var(--texto-secundario)", marginTop:4 }}>
-                                💬 {it.evaluacion.comentarios}
-                              </div>
-                            )}
-                          </div>
-                          <div style={{ textAlign:"right", flexShrink:0 }}>
-                            {it.evaluacion?.nota != null ? (
-                              <div style={{ fontSize:20, fontWeight:900, fontFamily:"var(--mono)", color: it.evaluacion.nota >= 4 ? "var(--terciario-dim)" : "#ffb4ab" }}>
-                                {it.evaluacion.nota}
-                              </div>
-                            ) : (
-                              <span style={{ fontSize:11, color:"var(--texto-apagado)", fontFamily:"var(--mono)" }}>Sin evaluar</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
             </section>
           )}
 

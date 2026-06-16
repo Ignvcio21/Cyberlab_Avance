@@ -455,18 +455,17 @@ export default function PanelDocente() {
     setCargando(true); setMensaje("")
     try {
       const r = await fetch(
-        `${API_URL}/docente/intentos?nombre_usuario_docente=${encodeURIComponent(nombreUsuario)}`,
+        `${API_URL}/docente/entregas`,
         { headers: { "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}` } }
       )
       const d = await r.json()
       if (!r.ok) { setMensaje(extraerError(d)); return }
-      setIntentos(Array.isArray(d) ? d : (d?.intentos || []))
+      setIntentos(Array.isArray(d) ? d : (d?.entregas || []))
     } catch { setMensaje("No se pudo conectar con el backend") }
     finally { setCargando(false) }
   }
 
   const cargarUsuarios = async () => {
-    if (!esAdmin) return
     setCargando(true); setMensaje("")
     try {
       const r = await fetch(

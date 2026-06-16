@@ -515,8 +515,11 @@ def admin_crear_usuario(datos: SolicitudCrearUsuario, usuario_actual: Usuario = 
 
 
 @app.get("/admin/usuarios", response_model=list[RespuestaUsuario])
-def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd), q: str = ""):
+def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd), q: str = ""):
     query = bd.query(Usuario)
+    # El docente solo puede ver a los estudiantes; el admin ve a todos los usuarios.
+    if usuario_actual.rol != "admin":
+        query = query.filter(Usuario.rol == "estudiante")
     if q:
         termino = f"%{q.strip().lower()}%"
         query = query.filter(
@@ -1439,6 +1442,16 @@ def ia_asistir_ejercicio(
         "máxima complejidad, end-to-end sin guía, el estudiante opera de forma completamente autónoma"
     )
 
+    # Las categorías verificables se filtran por tipo: un ejercicio de ATAQUE no
+    # debe recibir categorías puramente defensivas (alertas IDS, tráfico,
+    # correlación) y uno de DEFENSA no debe recibir las puramente ofensivas
+    # (escaneo nmap, enumeración de servicios).
+    _solo_defensa = {"revisar alertas del IDS", "consultar eventos o logs del sistema",
+                     "analizar el tráfico de red", "correlacionar eventos del incidente"}
+    _solo_ataque = {"escanear puertos / usar nmap", "enumerar servicios o usuarios"}
+    categorias_tipo = [c for c in CATEGORIAS_VERIFICABLES
+                       if c not in (_solo_defensa if datos.tipo == "ataque" else _solo_ataque)]
+
     prompt = (
         f"Eres un docente universitario experto en ciberseguridad. Crea el contenido para un ejercicio práctico de laboratorio del sistema CyberLab.\n\n"
         f"CONTEXTO IMPORTANTE: Los estudiantes ya han leído toda la teoría del nivel en la sección 'Información', que incluye comandos, herramientas y procedimientos. "
@@ -1458,7 +1471,7 @@ def ia_asistir_ejercicio(
         f"- NO inventes direcciones IP, puertos ni usuarios concretos: el laboratorio genera la IP real y el estudiante debe descubrirla en los logs. Refiérete al origen como 'una IP sospechosa' o 'el atacante'.\n"
         f"- items: exactamente {datos.num_puntos} OBJETIVOS observables que el estudiante debe lograr, redactados como resultados esperados, NO como pasos ni comandos.\n"
         f"- IMPORTANTE: cada item DEBE corresponder a una de estas categorías de acción verificables por el laboratorio "
-        f"(usa sus palabras clave en la redacción): {', '.join(CATEGORIAS_VERIFICABLES)}.\n"
+        f"(usa sus palabras clave en la redacción): {', '.join(categorias_tipo)}.\n"
         f"Todo en español. El nivel de complejidad del escenario debe reflejar el nivel {datos.nivel} indicado."
     )
     try:

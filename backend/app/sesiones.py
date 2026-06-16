@@ -17,6 +17,10 @@ from .models import (
     EntregaEjercicioDocente, Evento, Alerta, IpBloqueada,
     AccionUsuario,
 )
+# Patrón STRATEGY: estrategias de siembra de escenario (qué eventos simular)
+from .estrategias import EventoSimulado, crear_estrategia
+# Patrón OBSERVER: sujeto de eventos + detectores que derivan las alertas
+from .observadores import SujetoEventos, DetectorFuerzaBruta, DetectorEscaneoPuertos
 
 # ── Familias de comandos (matching por intención) ─────────────────
 # Cada familia agrupa las formas válidas de realizar una misma acción,
@@ -141,73 +145,43 @@ def _ip_aleatoria_libre(bd: Session, usuario_id: int) -> str:
     return _ip_aleatoria()  # espacio casi agotado: caso teórico
 
 
-def _sembrar_fuerza_bruta(bd: Session, ip: str, usuario_id: int, intentos: int = 8):
-    servicio = random.choice(["ssh", "rdp", "vpn", "panel-web"])
-    cuenta = random.choice(["admin", "root", "operador", "soporte"])
-    for i in range(1, intentos + 1):
-        bd.add(Evento(tipo_evento="Fuerza Bruta", ip_origen=ip, usuario_id=usuario_id,
-                      descripcion=f"Intento fallido #{i} en {servicio} contra cuenta '{cuenta}'"))
-    bd.add(Alerta(titulo="Ataque de fuerza bruta detectado", severidad="Alta", usuario_id=usuario_id,
-                  descripcion=f"Múltiples intentos fallidos desde {ip} en {servicio} (cuenta: {cuenta})"))
-
-
-def _sembrar_escaneo(bd: Session, ip: str, usuario_id: int):
-    puertos = random.choice(["22, 80, 443", "21, 22, 80", "80, 443, 8080", "22, 3389"])
-    for p in puertos.replace(" ", "").split(","):
-        bd.add(Evento(tipo_evento="Escaneo de Puertos", ip_origen=ip, usuario_id=usuario_id,
-                      descripcion=f"Sonda detectada en puerto {p} desde {ip}"))
-    bd.add(Alerta(titulo="Reconocimiento de red detectado", severidad="Media", usuario_id=usuario_id,
-                  descripcion=f"Escaneo de puertos ({puertos}) detectado desde {ip}"))
-
-
-def _sembrar_objetivo(bd: Session, ip: str, usuario_id: int):
-    """Modo ATAQUE: siembra un host OBJETIVO a auditar — servicios
-    expuestos, banners de versión y vulnerabilidades — coherente con el
-    rol de pentester (no un atacante entrante)."""
-    perfil = random.choice([
-        {"svcs": [("22", "SSH", "OpenSSH 7.4"), ("80", "HTTP", "Apache 2.4.29"), ("3306", "MySQL", "MySQL 5.5.62")],
-         "vuln": "MySQL 5.5 expuesto — posibles credenciales por defecto (root sin contraseña)"},
-        {"svcs": [("21", "FTP", "vsftpd 2.3.4"), ("22", "SSH", "OpenSSH 8.0"), ("80", "HTTP", "nginx 1.14.0")],
-         "vuln": "vsftpd 2.3.4 — versión con backdoor conocido (CVE-2011-2523)"},
-        {"svcs": [("80", "HTTP", "Apache 2.4.49"), ("443", "HTTPS", "Apache 2.4.49"), ("8080", "HTTP-alt", "Tomcat 9.0.30")],
-         "vuln": "Apache 2.4.49 — path traversal y RCE (CVE-2021-41773)"},
-        {"svcs": [("22", "SSH", "OpenSSH 7.2"), ("445", "SMB", "Samba 3.6.25"), ("3389", "RDP", "xrdp 0.9.1")],
-         "vuln": "Samba 3.6.25 — ejecución remota de código (CVE-2017-7494)"},
-    ])
-    puertos = ", ".join(s[0] for s in perfil["svcs"])
-    bd.add(Evento(tipo_evento="Host Objetivo", ip_origen=ip, usuario_id=usuario_id,
-                  descripcion=f"Host {ip} activo — puertos abiertos: {puertos}"))
-    for puerto, svc, version in perfil["svcs"]:
-        bd.add(Evento(tipo_evento="Servicio Expuesto", ip_origen=ip, usuario_id=usuario_id,
-                      descripcion=f"{puerto}/tcp open {svc} — {version}"))
-    bd.add(Evento(tipo_evento="Vulnerabilidad", ip_origen=ip, usuario_id=usuario_id,
-                  descripcion=perfil["vuln"]))
-
-
 def _sembrar_eventos_escenario(bd: Session, ejercicio: EjercicioDocente, ips: list, usuario_id: int):
-    """Siembra el laboratorio del usuario según el ROL del ejercicio.
+    """Siembra el laboratorio del usuario según el ROL del ejercicio, usando
+    los patrones STRATEGY (qué simular) y OBSERVER (qué alertas derivar).
 
     DEFENSA: actividad de un atacante entrante (fuerza bruta / escaneo) que
     el analista debe detectar y contener. Niveles 6-7: dos atacantes + ruido.
 
     ATAQUE: uno o más hosts OBJETIVO a auditar (servicios, banners, vulns)
     que el pentester debe descubrir y reportar."""
-    if ejercicio.tipo == "defensa":
-        if len(ips) == 1:
-            _sembrar_fuerza_bruta(bd, ips[0], usuario_id)
-        else:
-            _sembrar_fuerza_bruta(bd, ips[0], usuario_id)
-            _sembrar_escaneo(bd, ips[1], usuario_id)
-            # Ruido legítimo: una IP inocente que NO debe bloquearse
-            ip_ruido = _ip_aleatoria()
-            for ruta in ["/index.html", "/login"]:
-                bd.add(Evento(tipo_evento="Tráfico Web", ip_origen=ip_ruido, usuario_id=usuario_id,
-                              descripcion=f"GET {ruta} HTTP/1.1 200 — navegación normal desde {ip_ruido}"))
-    else:
-        # Ataque: cada IP es un host objetivo a comprometer
-        for ip in ips:
-            _sembrar_objetivo(bd, ip, usuario_id)
-    bd.commit()
+    sujeto = SujetoEventos()                          # OBSERVER: sujeto que persiste eventos y avisa a los detectores
+    sujeto.suscribir(DetectorFuerzaBruta())           # OBSERVER: suscribe el detector de fuerza bruta
+    sujeto.suscribir(DetectorEscaneoPuertos())        # OBSERVER: suscribe el detector de escaneo de puertos
+
+    if ejercicio.tipo == "defensa":                   # rol DEFENSA: hay un atacante entrante que detectar
+        if len(ips) == 1:                             # niveles 1-5: un solo atacante
+            estrategia = crear_estrategia("fuerza_bruta")     # STRATEGY: se elige la estrategia de fuerza bruta
+            for evento in estrategia.generar(ips[0]):         # STRATEGY: genera los eventos del escenario
+                sujeto.registrar(bd, evento, usuario_id)      # OBSERVER: persiste cada evento y notifica a los detectores
+        else:                                         # niveles 6-7: dos atacantes simultáneos
+            for evento in crear_estrategia("fuerza_bruta").generar(ips[0]):  # STRATEGY: fuerza bruta en la 1ª IP
+                sujeto.registrar(bd, evento, usuario_id)      # OBSERVER: persiste + notifica
+            for evento in crear_estrategia("escaneo").generar(ips[1]):       # STRATEGY: escaneo en la 2ª IP
+                sujeto.registrar(bd, evento, usuario_id)      # OBSERVER: persiste + notifica
+            # Ruido legítimo: una IP inocente que NO debe bloquearse (ningún detector reacciona a ella)
+            ip_ruido = _ip_aleatoria()                # IP de tráfico normal, sin relación con el ataque
+            for ruta in ["/index.html", "/login"]:    # dos peticiones web benignas
+                sujeto.registrar(bd, EventoSimulado(  # se registra el evento de ruido a través del sujeto
+                    "Tráfico Web", ip_ruido,          # tipo y origen del evento de ruido
+                    f"GET {ruta} HTTP/1.1 200 — navegación normal desde {ip_ruido}", {},  # descripción y contexto vacío
+                ), usuario_id)
+    else:                                             # rol ATAQUE: cada IP es un host objetivo a auditar
+        for ip in ips:                                # se siembra un host objetivo por cada IP
+            for evento in crear_estrategia("objetivo").generar(ip):  # STRATEGY: genera el host objetivo y sus servicios
+                sujeto.registrar(bd, evento, usuario_id)             # OBSERVER: persiste + notifica (no dispara alertas)
+
+    sujeto.finalizar(bd, usuario_id)                  # OBSERVER: cada detector emite su alerta si alcanzó el umbral
+    bd.commit()                                       # se confirman en la base de datos eventos y alertas (igual que antes)
 
 
 def ips_maliciosas(sesion: SesionEjercicio) -> list:

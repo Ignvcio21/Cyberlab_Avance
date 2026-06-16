@@ -1558,6 +1558,10 @@ def eliminar_ejercicio_docente(
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
     if not ej:
         raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+    # Las sesiones referencian el ejercicio por FK y NO tienen cascada: se
+    # borran a mano primero para evitar la violación de llave foránea
+    # (items y entregas sí se eliminan en cascada vía ORM).
+    bd.query(SesionEjercicio).filter(SesionEjercicio.ejercicio_id == ejercicio_id).delete(synchronize_session=False)
     bd.delete(ej)
     bd.commit()
     return {"mensaje": "Ejercicio eliminado"}

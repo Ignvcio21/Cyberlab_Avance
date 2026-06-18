@@ -882,7 +882,8 @@ export default function ExportarPage() {
         "Nota":         e.nota ?? "Sin evaluar",
         "Resultado (%)": e.porcentaje != null ? `${e.porcentaje}%` : "—",
         "Estado":       e.estado || "—",
-        "Fecha":        formatFecha(e.fecha_entrega),
+        // /docente/entregas entrega la fecha como `fecha_inicio`; se usa como respaldo.
+        "Fecha":        formatFecha(e.fecha_entrega || e.fecha_inicio),
       }
     })
     descargarCSV(filas, "notas-por-entrega.csv")
@@ -1005,7 +1006,8 @@ export default function ExportarPage() {
         "Nota":       e.nota ?? "—",
         "Resultado":  e.porcentaje != null ? `${e.porcentaje}%` : "—",
         "Estado":     e.estado || "—",
-        "Fecha":      formatFecha(e.fecha_entrega),
+        // /docente/entregas entrega la fecha como `fecha_inicio`; se usa como respaldo.
+        "Fecha":      formatFecha(e.fecha_entrega || e.fecha_inicio),
       }
     })
     abrirReporteImprimible({
@@ -1084,7 +1086,8 @@ export default function ExportarPage() {
         "Nota":       e?.nota ?? "—",
         "Resultado":  e?.porcentaje != null ? `${e.porcentaje}%` : "—",
         "Estado":     e ? (e.nota != null ? (e.nota >= 4 ? "Aprobado" : "Reprobado") : "Sin evaluar") : "Sin entregar",
-        "Fecha":      formatFecha(e?.fecha_entrega),
+        // /docente/entregas entrega la fecha como `fecha_inicio`; se usa como respaldo.
+        "Fecha":      formatFecha(e?.fecha_entrega || e?.fecha_inicio),
       }
     })
   }
@@ -1114,6 +1117,7 @@ export default function ExportarPage() {
       ],
       columnas: [
         { key: "Estudiante", label: "Estudiante" },
+        { key: "Correo",     label: "Correo" },
         { key: "Nota",       label: "Nota",      align: "center", formato: "nota" },
         { key: "Resultado",  label: "Resultado", align: "center", formato: "porcentaje" },
         { key: "Estado",     label: "Estado",    align: "center", formato: "estado" },

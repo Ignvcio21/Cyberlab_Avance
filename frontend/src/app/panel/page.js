@@ -834,6 +834,9 @@ export default function PanelDocente() {
       setModalEntrega(null); setNotaEntrega(""); setComentariosEntrega("")
       if (perfilActivo) await cargarEntregasPerfil(perfilActivo)
       if (ejSeleccionado) await cargarEntregasEj(ejSeleccionado.id)
+      // Refresca también la lista global para que el badge "sin nota" del
+      // listado de estudiantes deje de mostrar la entrega ya evaluada.
+      await cargarIntentos()
     } catch { setMensaje("No se pudo conectar") }
     finally { setCargando(false); window.cyberProgress?.end() }
   }
@@ -1007,7 +1010,7 @@ export default function PanelDocente() {
             <ModalEntrega
               entregaId={detalleEntregaId}
               onCerrar={() => setDetalleEntregaId(null)}
-              onEvaluada={() => { if (perfilActivo) cargarEntregasPerfil(perfilActivo) }}
+              onEvaluada={() => { if (perfilActivo) cargarEntregasPerfil(perfilActivo); cargarIntentos() }}
             />
           )}
 

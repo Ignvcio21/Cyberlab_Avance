@@ -124,11 +124,13 @@ KW_ITEM_DOC = [
 
 
 def _es_item_documentacion(descripcion: str) -> bool:
+    """True si el item es de "documentar/reportar" (su keyword aparece en la descripción)."""
     d = (descripcion or "").lower()
     return any(k in d for k in KW_ITEM_DOC)
 
 
 def _ip_aleatoria() -> str:
+    """Genera una IP privada aleatoria del rango 192.168.x.y para los escenarios."""
     return f"192.168.{random.randint(1, 10)}.{random.randint(10, 250)}"
 
 
@@ -210,6 +212,7 @@ def _atacantes_bloqueados(bd: Session, sesion: SesionEjercicio) -> bool:
 
 
 def _ip_atacante_bloqueada(bd: Session, usuario_id: int, ip: str) -> bool:
+    """True si una IP concreta está bloqueada en el firewall del usuario."""
     return bd.query(IpBloqueada).filter(
         IpBloqueada.usuario_id == usuario_id, IpBloqueada.direccion_ip == ip,
     ).first() is not None
@@ -276,13 +279,15 @@ def item_verificable(descripcion: str) -> bool:
 
 
 def _normalizar_comando(comando: str) -> str:
+    """Normaliza un comando: sin espacios extra, recortado y en minúsculas."""
     return re.sub(r"\s+", " ", (comando or "").strip().lower())
 
 
 def _comando_en_familias(comando_norm: str, familias: list) -> bool:
-    for fam in familias:
-        for rx in _FAMILIAS_RX.get(fam, []):
-            if rx.search(comando_norm):
+    """True si el comando calza con el patrón de ALGUNA de las familias dadas."""
+    for fam in familias:                          # por cada familia aceptada por el item
+        for rx in _FAMILIAS_RX.get(fam, []):      # por cada patrón de esa familia
+            if rx.search(comando_norm):           # ¿el comando contiene ese patrón?
                 return True
     return False
 
@@ -305,6 +310,7 @@ def item_cumplido(descripcion: str, comando: str, salida: str) -> bool:
 
 
 def obtener_sesion_activa(bd: Session, usuario_id: int) -> SesionEjercicio | None:
+    """Devuelve la sesión en estado "activa" del usuario, o None si no tiene ninguna."""
     return bd.query(SesionEjercicio).filter(
         SesionEjercicio.usuario_id == usuario_id,
         SesionEjercicio.estado == "activa",
@@ -328,10 +334,12 @@ def _leer_items_raw(sesion: SesionEjercicio) -> dict:
 
 
 def _leer_items(sesion: SesionEjercicio) -> dict:
+    """Estado simplificado {item_id: bool completado} (descarta los metadatos)."""
     return {k: _item_ok(v) for k, v in _leer_items_raw(sesion).items()}
 
 
 def _leer_pistas(sesion: SesionEjercicio) -> list:
+    """Lista de pistas pedidas (parsea el JSON; lista vacía si está mal formado)."""
     try:
         pistas = json.loads(sesion.pistas or "[]")
         return pistas if isinstance(pistas, list) else []
@@ -352,6 +360,7 @@ def registrar_pista(bd: Session, sesion: SesionEjercicio, texto: str):
 
 
 def _porcentaje(items: dict) -> int:
+    """Porcentaje de items completados (items True / total, redondeado)."""
     if not items:
         return 0
     return round(sum(1 for v in items.values() if v) / len(items) * 100)
@@ -370,6 +379,8 @@ def fmt_duracion(seg: int) -> str:
 
 
 def crear_sesion(bd: Session, usuario_id: int, ejercicio: EjercicioDocente) -> SesionEjercicio:
+    """Crea una nueva sesión de ejercicio: limpia el laboratorio, genera el
+    escenario (IPs atacantes, eventos, fases) y arranca el temporizador."""
     # Cerrar cualquier sesión activa anterior (de este u otro ejercicio)
     previa = obtener_sesion_activa(bd, usuario_id)
     if previa:
@@ -392,7 +403,7 @@ def crear_sesion(bd: Session, usuario_id: int, ejercicio: EjercicioDocente) -> S
             ip2 = _ip_aleatoria_libre(bd, usuario_id)
         ips.append(ip2)
 
-    items = {it.id: False for it in ejercicio.items}
+    items = {it.id: False for it in ejercicio.items}   # checklist: todos los items empiezan en False
     # Duración efectiva: el cronómetro corre lo que dure el ejercicio, pero
     # NUNCA más allá de la fecha límite (opción "el plazo es para entregar").
     inicio = _ahora()
@@ -674,19 +685,22 @@ def finalizar_sesiones_vencidas(bd: Session):
 
 
 def sesion_a_dict(bd: Session, sesion: SesionEjercicio) -> dict:
+    """Serializa la sesión al dict que consume el frontend (estado, %, items, timer…).
+    Nunca expone las IPs atacantes: solo avisa si hay más de un actor."""
     items_estado = _leer_items(sesion)
     items_db = bd.query(ItemEjercicioDocente).filter(
         ItemEjercicioDocente.ejercicio_id == sesion.ejercicio_id
     ).order_by(ItemEjercicioDocente.orden).all()
     restante = 0
     if sesion.estado == "activa":
+        # Segundos que faltan para el límite (el timer visual del frontend).
         restante = max(0, int((_aware(sesion.fecha_limite) - _ahora()).total_seconds()))
     try:
         fases = json.loads(sesion.fases or "[]")
     except Exception:
         fases = []
-    pct = _porcentaje(items_estado)
-    penal = min((sesion.ayudas or 0) * 5, 30)
+    pct = _porcentaje(items_estado)                     # % de items completados
+    penal = min((sesion.ayudas or 0) * 5, 30)           # penalización por pistas (-5%/pista, máx -30%)
     return {
         "id": sesion.id,
         "ejercicio_id": sesion.ejercicio_id,
@@ -764,9 +778,11 @@ def evaluar_comando_en_sesion(bd: Session, usuario_id: int, comando: str, salida
         break
 
     if cambio:
+        # Persiste el nuevo estado del checklist.
         sesion.items_estado = json.dumps({str(k): v for k, v in items_raw.items()})
         bd.commit()
+        # Si TODOS los items quedaron completos, la sesión se cierra como "completada".
         if items_raw and all(_item_ok(v) for v in items_raw.values()):
             finalizar_sesion(bd, sesion, "completada")
 
-    return sesion_a_dict(bd, sesion)
+    return sesion_a_dict(bd, sesion)   # devuelve el estado actualizado al frontend

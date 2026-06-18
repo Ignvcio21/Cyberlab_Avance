@@ -1,11 +1,27 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: / (raíz) — Inicio de sesión / registro + landing
+// -----------------------------------------------------------------------------
+// Es la primera pantalla que ve el usuario. Cumple dos funciones:
+//   1) Tarjeta de autenticación que alterna entre "Iniciar sesión" y "Crear
+//      cuenta" (modoRegistro). Al loguearse guarda los datos de sesión en
+//      sessionStorage y redirige a /inicio.
+//   2) Sección "hero" promocional debajo del login con el mensaje de la
+//      plataforma y botones de ejemplo.
+// Incluye un fondo animado de partículas dibujado con <canvas>.
+// =============================================================================
+
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 
+// URL base del backend (definida por variable de entorno en el build).
 const API_URL = process.env.NEXT_PUBLIC_API_URL
 
 // Botón para mostrar/ocultar la contraseña
+// Componente reutilizable: muestra un icono de "ojo" (abierto/tachado) que
+// alterna la visibilidad del campo de contraseña. Recibe el estado actual
+// (ver) y el callback a ejecutar al hacer clic (onClick).
 function OjoBtn({ ver, onClick }) {
   return (
     <button
@@ -38,23 +54,26 @@ function OjoBtn({ ver, onClick }) {
 
 export default function InicioSesion() {
   const router = useRouter()
-  const canvasRef = useRef(null)
-  const [modoRegistro, setModoRegistro] = useState(false)
-  const [nombre, setNombre] = useState("")
+  const canvasRef = useRef(null) // referencia al <canvas> del fondo de partículas
+  // --- Estado del formulario ---
+  const [modoRegistro, setModoRegistro] = useState(false) // false=login, true=registro
+  const [nombre, setNombre] = useState("")                 // solo usado en registro
   const [correo, setCorreo] = useState("")
   const [contrasena, setContrasena] = useState("")
-  const [confirmarContrasena, setConfirmarContrasena] = useState("")
-  const [mensaje, setMensaje] = useState("")
-  const [cargando, setCargando] = useState(false)
-  const [verPass, setVerPass] = useState(false)
-  const [verConfirm, setVerConfirm] = useState(false)
+  const [confirmarContrasena, setConfirmarContrasena] = useState("") // solo registro
+  const [mensaje, setMensaje] = useState("")               // mensaje de error/éxito
+  const [cargando, setCargando] = useState(false)          // bloquea el botón durante la petición
+  const [verPass, setVerPass] = useState(false)            // mostrar/ocultar contraseña
+  const [verConfirm, setVerConfirm] = useState(false)      // mostrar/ocultar confirmación
   const [sugerirRegistro, setSugerirRegistro] = useState(false)  // correo sin cuenta
 
+  // Maneja el envío del formulario en modo LOGIN.
   const manejarLogin = async (e) => {
     e.preventDefault()
-    if (cargando) return
+    if (cargando) return // evita envíos dobles
     setMensaje(""); setSugerirRegistro(false); setCargando(true)
     try {
+      // Envía credenciales al backend (correo normalizado a minúsculas).
       const respuesta = await fetch(`${API_URL}/iniciar-sesion`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ correo: correo.trim().toLowerCase(), contrasena })
@@ -66,19 +85,23 @@ export default function InicioSesion() {
         setMensaje(datos.detail || "Error al iniciar sesión")
         return
       }
+      // Login correcto: se guardan los datos de sesión en sessionStorage
+      // (se borran al cerrar la pestaña) y se navega al inicio.
       sessionStorage.setItem("nombre_usuario", datos.nombre_usuario)
       sessionStorage.setItem("nombre_display", datos.nombre || datos.nombre_usuario)
-      if (datos.rol)   sessionStorage.setItem("rol_usuario", datos.rol)
-      if (datos.token) sessionStorage.setItem("token", datos.token)
+      if (datos.rol)   sessionStorage.setItem("rol_usuario", datos.rol)  // admin / usuario
+      if (datos.token) sessionStorage.setItem("token", datos.token)      // token de sesión
       router.push("/inicio")
     } catch { setMensaje("No se pudo conectar con el servidor") }
     finally { setCargando(false) }
   }
 
+  // Maneja el envío del formulario en modo REGISTRO.
   const manejarRegistro = async (e) => {
     e.preventDefault()
     if (cargando) return
     setMensaje("")
+    // Validaciones de los campos antes de llamar al backend.
     if (!nombre.trim()) { setMensaje("Ingresa tu nombre"); return }
     if (!correo.trim() || !correo.includes("@")) { setMensaje("Ingresa un correo electrónico válido"); return }
     if (!contrasena.trim()) { setMensaje("Ingresa una contraseña"); return }
@@ -86,12 +109,14 @@ export default function InicioSesion() {
     if (contrasena !== confirmarContrasena) { setMensaje("Las contraseñas no coinciden"); return }
     setCargando(true)
     try {
+      // Crea la cuenta en el backend.
       const respuesta = await fetch(`${API_URL}/registrar`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nombre: nombre.trim(), correo: correo.trim().toLowerCase(), contrasena })
       })
       const datos = await respuesta.json()
       if (!respuesta.ok) { setMensaje(datos.detail || "No se pudo completar el registro"); return }
+      // Registro exitoso: se vuelve al modo login y se limpian los campos.
       setMensaje("✓ Cuenta creada. Ya puedes iniciar sesión.")
       setModoRegistro(false); setConfirmarContrasena(""); setNombre("")
     } catch { setMensaje("No se pudo conectar con el servidor") }
@@ -99,6 +124,9 @@ export default function InicioSesion() {
   }
 
   // Canvas partículas
+  // Efecto que dibuja y anima el fondo de partículas conectadas. Se ejecuta una
+  // sola vez al montar; crea N puntos que se mueven, rebotan en los bordes y se
+  // unen con líneas cuando están cerca. Limpia la animación al desmontar.
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -108,7 +136,8 @@ export default function InicioSesion() {
     resize()
     window.addEventListener("resize", resize)
 
-    const N = 55
+    const N = 55 // cantidad de partículas
+    // Cada partícula tiene posición (x,y), velocidad (vx,vy) y radio (r).
     const pts = Array.from({ length: N }, () => ({
       x: Math.random() * canvas.width,
       y: Math.random() * canvas.height,
@@ -117,8 +146,10 @@ export default function InicioSesion() {
       r: Math.random() * 1.8 + 0.7,
     }))
 
+    // Bucle de animación: se llama una vez por frame.
     const draw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
+      // Mueve cada partícula y la rebota al tocar un borde.
       for (const p of pts) {
         p.x += p.vx; p.y += p.vy
         if (p.x < 0 || p.x > canvas.width)  p.vx *= -1
@@ -128,6 +159,8 @@ export default function InicioSesion() {
         ctx.fillStyle = "rgba(41,151,255,0.55)"
         ctx.fill()
       }
+      // Dibuja una línea entre cada par de partículas cercanas (< 110px),
+      // con opacidad proporcional a la cercanía → efecto de "constelación".
       for (let i = 0; i < N; i++) {
         for (let j = i + 1; j < N; j++) {
           const dx = pts[i].x - pts[j].x
@@ -149,6 +182,7 @@ export default function InicioSesion() {
     return () => { cancelAnimationFrame(animId); window.removeEventListener("resize", resize) }
   }, [])
 
+  // Alterna entre los modos login/registro y limpia campos y mensajes.
   const alternarModo = () => {
     setMensaje(""); setSugerirRegistro(false); setModoRegistro(v => !v)
     setContrasena(""); setConfirmarContrasena(""); setNombre("")
@@ -158,7 +192,7 @@ export default function InicioSesion() {
   return (
     <main style={{ minHeight: "100vh", background: "#141414", fontFamily: "'Inter', -apple-system, sans-serif" }}>
 
-      {/* ── LOGIN CARD ── */}
+      {/* ── LOGIN CARD ──  Tarjeta de autenticación sobre el fondo de partículas */}
       <section style={{ background: "#111113", padding: "60px 24px 60px", borderBottom: "1px solid #2c2c2e", position: "relative", overflow: "hidden" }}>
         <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} />
         <div id="login-card" style={{
@@ -178,6 +212,7 @@ export default function InicioSesion() {
               : "Ingresa tus credenciales para acceder al laboratorio"}
           </p>
 
+          {/* El formulario llama a manejarRegistro o manejarLogin según el modo. */}
           <form onSubmit={modoRegistro ? manejarRegistro : manejarLogin} style={{ display: "grid", gap: 16 }}>
             {/* Nombre (solo registro) */}
             {modoRegistro && (
@@ -337,7 +372,8 @@ export default function InicioSesion() {
         </div>
       </section>
 
-      {/* ── HERO ── */}
+      {/* ── HERO ──  Sección promocional bajo el login: titular, descripción
+          de la plataforma y botones de ejemplo. */}
       <section style={{ background: "#1c1c1e", padding: "60px 24px 80px", textAlign: "center", borderTop: "1px solid #2c2c2e" }}>
         <p style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.06em", color: "#2997ff", textTransform: "uppercase", marginBottom: 16 }}>
           Instituto de Ciberseguridad Industrial

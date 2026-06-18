@@ -1,5 +1,16 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: /dashboard/defensa — Laboratorio de defensa (terminal SOC)
+// -----------------------------------------------------------------------------
+// Es la versión DEFENSIVA (Blue Team) del laboratorio. Funciona igual que
+// /dashboard pero el estudiante actúa como analista de un SOC: monitorea logs,
+// detecta al atacante y lo bloquea. La novedad es que el ataque tiene "fases"
+// que el backend hace avanzar en tiempo real (polling) aunque el estudiante no
+// escriba, y cada paso del checklist puede aparecer "bajo ataque" hasta que se
+// neutraliza. El backend sigue siendo la fuente de verdad (checklist/timer/entrega).
+// =============================================================================
+
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import GuardSesion from "../../componentes/GuardSesion"
@@ -10,18 +21,22 @@ import FeedbackCierre from "../../componentes/FeedbackCierre"
 // ================================================================
 // CONSTANTES
 // ================================================================
+// URL base del backend (variable de entorno o servidor de producción).
 const API = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
+// Cabeceras HTTP con el token de sesión para las peticiones autenticadas.
 const getAuthHeaders = () => ({
   "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
+// Nombres legibles de los 7 niveles, en su versión defensiva (SOC).
 const NOMBRES_NIVELES_DEF = {
   1: "Monitoreo Básico", 2: "Detección de Fuerza Bruta", 3: "Escaneo — Defensa",
   4: "Investigación de Incidentes", 5: "Respuesta Activa", 6: "Multi-vector", 7: "Defensa Integral",
 }
 
+// Convierte segundos a "m:ss" para el temporizador.
 const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
 
 // ================================================================
@@ -33,47 +48,48 @@ export default function DefensaDashboard() {
   const router  = useRouter()
   const termRef = useRef(null)
 
-  const [nombreUsuario, setNombreUsuario] = useState("")
-  const [comando,       setComando]       = useState("")
+  const [nombreUsuario, setNombreUsuario] = useState("")  // usuario en sesión
+  const [comando,       setComando]       = useState("")  // texto del input de la terminal
+  // Líneas mostradas en la terminal SOC.
   const [historial,     setHistorial]     = useState([
     "CyberLab Defensa — Modo analista SOC",
     "Escribe 'ayuda' para ver los comandos disponibles.",
   ])
-  const [mensaje,       setMensaje]       = useState("")
-  const [stats,         setStats]         = useState({ total_eventos: 0, total_alertas: 0 })
+  const [mensaje,       setMensaje]       = useState("")  // mensaje de error/aviso
+  const [stats,         setStats]         = useState({ total_eventos: 0, total_alertas: 0 }) // contadores de cabecera
 
   // ── Ejercicios del docente + sesión backend ──
-  const [ejerciciosDocente,   setEjerciciosDocente]   = useState([])
-  const [ejDocenteActivo,     setEjDocenteActivo]     = useState(null)
+  const [ejerciciosDocente,   setEjerciciosDocente]   = useState([])      // ejercicios de defensa publicados
+  const [ejDocenteActivo,     setEjDocenteActivo]     = useState(null)    // ejercicio en curso
   const [sesion,              setSesion]              = useState(null)   // estado devuelto por el backend
   const [timerDocente,        setTimerDocente]        = useState(0)      // countdown visual, sincronizado con restante_seg
-  const [pistaDocente,        setPistaDocente]        = useState("")
-  const [mostrarPista,        setMostrarPista]        = useState(false)
-  const [cargandoPista,       setCargandoPista]       = useState(false)
-  const [nivelDocenteAbierto, setNivelDocenteAbierto] = useState(1)
-  const [confirmEjDocente,    setConfirmEjDocente]    = useState(null)
-  const [entregados,          setEntregados]          = useState(new Set())
-  const [entregadosCargados,  setEntregadosCargados]  = useState(false)
+  const [pistaDocente,        setPistaDocente]        = useState("")     // texto de la pista actual
+  const [mostrarPista,        setMostrarPista]        = useState(false)  // mostrar/ocultar la pista
+  const [cargandoPista,       setCargandoPista]       = useState(false)  // pidiendo pista al backend
+  const [nivelDocenteAbierto, setNivelDocenteAbierto] = useState(1)      // nivel seleccionado en la grilla
+  const [confirmEjDocente,    setConfirmEjDocente]    = useState(null)   // ejercicio a confirmar en el modal
+  const [entregados,          setEntregados]          = useState(new Set()) // ids ya entregados
+  const [entregadosCargados,  setEntregadosCargados]  = useState(false)  // ya se cargó la lista de entregados
 
   // ── Popup fin de ejercicio ──
-  const [popupFin,    setPopupFin]    = useState(false)
-  const [popupFinPct, setPopupFinPct] = useState(0)
-  const [popupGano,   setPopupGano]   = useState(false)
-  const finalizadaRef = useRef(false)
+  const [popupFin,    setPopupFin]    = useState(false) // mostrar popup de cierre
+  const [popupFinPct, setPopupFinPct] = useState(0)     // porcentaje final mostrado
+  const [popupGano,   setPopupGano]   = useState(false) // true = ataque neutralizado al 100%
+  const finalizadaRef = useRef(false) // evita ejecutar el cierre más de una vez
 
   // ── Feedback automático de cierre (orientación para el estudiante) ──
   const [feedback,         setFeedback]         = useState(null)   // { texto, fuente }
   const [feedbackCargando, setFeedbackCargando] = useState(false)
 
   // ── Ataque en tiempo real (fases reales generadas por el servidor) ──
-  const [faseAtaqueDisparada, setFaseAtaqueDisparada] = useState([])
-  const fasesPrevRef = useRef([])
+  const [faseAtaqueDisparada, setFaseAtaqueDisparada] = useState([]) // índices de pasos actualmente "bajo ataque"
+  const fasesPrevRef = useRef([])  // fases ya anunciadas (para detectar transiciones)
 
-  // ── Derivados de la sesión ──
-  const sesionItems   = sesion?.items || []
-  const pctDocente    = sesion?.porcentaje ?? 0
-  const ayudasDocente = sesion?.ayudas ?? 0
-  const sesionActiva  = sesion?.estado === "activa"
+  // ── Derivados de la sesión ──  (valores calculados desde el estado de sesión)
+  const sesionItems   = sesion?.items || []          // pasos del checklist
+  const pctDocente    = sesion?.porcentaje ?? 0      // porcentaje completado
+  const ayudasDocente = sesion?.ayudas ?? 0          // nº de pistas pedidas
+  const sesionActiva  = sesion?.estado === "activa"  // ¿la sesión sigue en curso?
 
   // Layout responsivo: escenario + terminal lado a lado (50/50) en pantallas anchas; apilado en chicas
   const [anchoVentana, setAnchoVentana] = useState(1400)
@@ -88,6 +104,7 @@ export default function DefensaDashboard() {
   // Alto máximo de cada columna: que ambas quepan en pantalla con scroll interno
   const altoPanel = Math.max(440, altoVentana - 180)
 
+  // Agrupa los ejercicios de defensa por nivel: { nivel: [ejercicios...] }.
   const porNivel = useMemo(() => {
     const m = {}
     ejerciciosDocente.forEach(ej => { const n = ej.nivel || 1; if (!m[n]) m[n] = []; m[n].push(ej) })
@@ -95,6 +112,7 @@ export default function DefensaDashboard() {
   }, [ejerciciosDocente])
 
   // ── Estadísticas ───────────────────────────────────────────────
+  // Trae del backend los contadores de eventos y alertas de la cabecera.
   const cargarStats = async () => {
     try {
       const d = await (await fetch(`${API}/estadisticas`, {
@@ -107,6 +125,7 @@ export default function DefensaDashboard() {
     } catch {}
   }
 
+  // Trae los ids de ejercicios ya entregados (para marcarlos en la lista).
   const cargarEntregados = useCallback(async () => {
     try {
       const r = await fetch(`${API}/mis-entregas-docente`, { headers: getAuthHeaders() })
@@ -117,6 +136,9 @@ export default function DefensaDashboard() {
   }, [])
 
   // ── Aplicar estado de sesión devuelto por el backend ───────────
+  // Sincroniza la UI con la sesión: anuncia avances/contenciones de las fases en
+  // la terminal, marca qué pasos están bajo ataque, actualiza el timer y, si la
+  // sesión cerró, dispara el popup de fin y el feedback.
   const aplicarSesion = useCallback((s) => {
     if (!s) return
     setSesion(s)
@@ -137,8 +159,10 @@ export default function DefensaDashboard() {
       }
     })
     fasesPrevRef.current = fases
+    // Guarda los índices de los pasos cuya fase está "impactada" → se pintan en rojo ("bajo ataque").
     setFaseAtaqueDisparada(fases.filter(f => f.estado === "impactada").map(f => (f.orden || 1) - 1))
 
+    // Si sigue activa, solo actualiza el contador con el tiempo restante real.
     if (s.estado === "activa") {
       setTimerDocente(s.restante_seg ?? 0)
       return
@@ -167,6 +191,7 @@ export default function DefensaDashboard() {
   }, [])
 
   // ── Iniciar ejercicio (el backend crea la sesión) ──────────────
+  // Pide al backend crear la sesión de defensa y prepara la terminal SOC.
   const iniciarEjDocente = async (ej) => {
     // Guarda: si este ejercicio ya está activo, no reiniciar (evita reset del temporizador)
     if (sesionActiva && ejDocenteActivo?.id === ej.id) return
@@ -195,6 +220,7 @@ export default function DefensaDashboard() {
   }
 
   // ── Restaurar sesión activa al recargar la página ──────────────
+  // Si el estudiante recarga con un ejercicio de defensa en curso, lo recupera.
   const restaurarSesion = useCallback(async () => {
     try {
       const r = await fetch(`${API}/ejercicios-docente/sesion/activa`, { headers: getAuthHeaders() })
@@ -212,6 +238,7 @@ export default function DefensaDashboard() {
   }, [aplicarSesion])
 
   // ── Confirmar expiración con el servidor ───────────────────────
+  // Al llegar el timer a 0, consulta al servidor el cierre real de la sesión.
   const confirmarExpiracion = useCallback(async () => {
     try {
       const r = await fetch(`${API}/ejercicios-docente/sesion/activa`, { headers: getAuthHeaders() })
@@ -227,6 +254,7 @@ export default function DefensaDashboard() {
   }, [aplicarSesion, pctDocente, cargarEntregados])
 
   // ── Feedback de cierre: orientación automática para el estudiante ──
+  // Pide al backend el texto de orientación que se muestra al terminar.
   const cargarFeedback = async (ejId) => {
     if (!ejId) return
     setFeedback(null); setFeedbackCargando(true)
@@ -238,6 +266,7 @@ export default function DefensaDashboard() {
   }
 
   // ── Pedir pista (el backend cuenta las ayudas) ─────────────────
+  // Solicita una pista; el backend la genera y suma una ayuda (penaliza el %).
   const pedirPistaDocente = async () => {
     if (!sesionActiva || cargandoPista) return
     setCargandoPista(true)
@@ -260,6 +289,8 @@ export default function DefensaDashboard() {
   }
 
   // ── Ejecutar comando (el backend valida el checklist) ──────────
+  // Envía el comando a la terminal defensiva del backend, muestra la salida y
+  // sincroniza la sesión (que puede marcar pasos como neutralizados).
   const ejecutarComando = async (e) => {
     e.preventDefault()
     if (!comando.trim()) return
@@ -274,6 +305,7 @@ export default function DefensaDashboard() {
       })
       const d   = await r.json()
       const sal = d?.salida ?? ""
+      // "__LIMPIAR__" es la señal del comando "clear/limpiar": resetea la terminal.
       if (sal === "__LIMPIAR__") {
         setHistorial(["CyberLab Defensa — Modo analista SOC", "Escribe 'ayuda' para ver los comandos."])
       } else {
@@ -287,21 +319,25 @@ export default function DefensaDashboard() {
   }
 
   // ── Efectos ────────────────────────────────────────────────────
+  // Auto-scroll de la terminal al final cuando llega salida nueva.
   useEffect(() => {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight
   }, [historial])
 
+  // Al montar: verifica que haya sesión; si no, redirige al login.
   useEffect(() => {
     const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
     setNombreUsuario(u)
   }, [router])
 
+  // Carga inicial al conocer el usuario y refresco de stats cada 5s.
   useEffect(() => {
     if (!nombreUsuario) return
     cargarStats()
     cargarEntregados()
     restaurarSesion()
+    // Carga los ejercicios de defensa publicados por el docente.
     fetch(`${API}/ejercicios-docente/tipo/defensa`, { headers: getAuthHeaders() })
       .then(r => r.json()).then(d => { if (Array.isArray(d)) setEjerciciosDocente(d) }).catch(() => {})
     const iv = setInterval(cargarStats, 5000)
@@ -309,6 +345,7 @@ export default function DefensaDashboard() {
   }, [nombreUsuario, cargarEntregados, restaurarSesion])
 
   // Countdown visual — el cierre real lo decide el servidor
+  // Resta 1s por segundo; al llegar a 0 confirma la expiración con el servidor.
   useEffect(() => {
     if (!sesionActiva || !ejDocenteActivo) return
     const iv = setInterval(() => {
@@ -342,8 +379,8 @@ export default function DefensaDashboard() {
   // ================================================================
   // RENDER
   // ================================================================
-  const listaNivel       = porNivel[nivelDocenteAbierto] || []
-  const entregadosNivel  = listaNivel.filter(ej => entregados.has(ej.id)).length
+  const listaNivel       = porNivel[nivelDocenteAbierto] || []                    // ejercicios del nivel abierto
+  const entregadosNivel  = listaNivel.filter(ej => entregados.has(ej.id)).length  // cuántos ya entregó
 
   return (
     <GuardSesion>
@@ -353,7 +390,7 @@ export default function DefensaDashboard() {
 
             <BarraSuperior paginaActiva="defensa" />
 
-            {/* ── PAGE HEADER ── */}
+            {/* ── PAGE HEADER ──  Título, usuario y nivel SOC activo (+ mensaje de error) */}
             <header style={{ marginBottom:4, display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
               <div>
                 <h1 style={{ margin:"0 0 4px", fontSize:32, fontWeight:800, letterSpacing:"-1px", color:"#f5f5f7", lineHeight:1 }}>
@@ -386,7 +423,8 @@ export default function DefensaDashboard() {
               ))}
             </div>
 
-            {/* ── NIVELES DEFENSA (ejercicios publicados por el docente) ── */}
+            {/* ── NIVELES DEFENSA (ejercicios publicados por el docente) ──  Grilla
+                de 7 niveles SOC; al elegir uno se listan sus ejercicios de defensa. */}
             <div className="card-mock">
               <div className="card-mock-header">
                 <div>
@@ -464,7 +502,8 @@ export default function DefensaDashboard() {
             {/* ── ESCENARIO + TERMINAL lado a lado (mitad y mitad cuando hay ejercicio activo) ── */}
             <div style={ladoALado ? { display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, alignItems:"stretch" } : undefined}>
 
-            {/* EJERCICIO DOCENTE ACTIVO */}
+            {/* EJERCICIO DOCENTE ACTIVO: escenario, barra de progreso y checklist.
+                Cada paso se ve verde (neutralizado), rojo (bajo ataque) o neutro. */}
             {ejDocenteActivo && sesionActiva && (
               <div className="exercise-card" style={{ borderColor:"rgba(48,209,88,0.35)", ...(ladoALado ? { maxHeight: altoPanel, overflowY: "auto", paddingBottom: 8 } : {}) }}>
                 {/* Header con título + timer */}
@@ -589,7 +628,7 @@ export default function DefensaDashboard() {
               </div>
             )}
 
-            {/* Estado vacío — sin ejercicios */}
+            {/* Estado vacío — sin ejercicios: aviso cuando el docente no ha publicado nada */}
             {ejerciciosDocente.length === 0 && (
               <div className="card-mock" style={{ padding:"44px 24px", textAlign:"center" }}>
                 <div style={{ fontSize:40, marginBottom:14 }}>🛡</div>
@@ -602,7 +641,8 @@ export default function DefensaDashboard() {
               </div>
             )}
 
-            {/* ── TERMINAL SOC ── */}
+            {/* ── TERMINAL SOC ──  Emulador donde el analista escribe comandos
+                defensivos; muestra los eventos en tiempo real y la salida del backend. */}
             <section style={{ background:"#0d1117", border:"1px solid rgba(48,209,88,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)", display: ladoALado ? "flex" : undefined, flexDirection: ladoALado ? "column" : undefined }}>
               <div style={{ background:"#161b22", padding:"11px 16px", display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
                 <div style={{ display:"flex", gap:6 }}>
@@ -632,7 +672,8 @@ export default function DefensaDashboard() {
 
             </div>
 
-            {/* ── Popup fin de ejercicio docente ── */}
+            {/* ── Popup fin de ejercicio docente ──  Muestra si el ataque fue
+                neutralizado (🛡) o ganó el atacante (💀), el % final y el feedback. */}
             {popupFin && (
               <div className="modal-fondo" onClick={() => setPopupFin(false)}>
                 <div className="modal-tarjeta" style={{ maxWidth:480, textAlign:"center" }} onClick={e => e.stopPropagation()}>
@@ -681,7 +722,9 @@ export default function DefensaDashboard() {
               </div>
             )}
 
-            {/* ── Modal confirmación ejercicio docente ── */}
+            {/* ── Modal confirmación ejercicio docente ──  Antes de iniciar muestra
+                los datos del ejercicio y advierte que el timer arranca y se entrega
+                una sola vez (o avisa si ya fue entregado). */}
             {confirmEjDocente && (() => {
               const yaEntregado = entregados.has(confirmEjDocente.id)
               return (

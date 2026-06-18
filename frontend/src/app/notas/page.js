@@ -1,12 +1,24 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: /notas — Mis notas y retroalimentación (vista del estudiante)
+// -----------------------------------------------------------------------------
+// Muestra al estudiante todas sus entregas, agrupadas por nivel en un acordeón.
+// Incluye un resumen general (entregadas, evaluadas, aprobadas, promedio) y,
+// por cada entrega, la nota, la orientación automática de la IA, la
+// retroalimentación del docente y el resultado calculado por el servidor.
+// Permite ordenar por fecha o nombre. Protegida por <GuardSesion>.
+// =============================================================================
+
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 
+// URL base del backend (variable de entorno o servidor de producción).
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
+// Nombres legibles de cada nivel, según el tipo de ejercicio (ataque o defensa).
 const NOMBRES_NIVELES = {
   ataque: {
     1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración", 4: "Explotación",
@@ -18,6 +30,7 @@ const NOMBRES_NIVELES = {
   },
 }
 
+// Formatea una fecha ISO a fecha+hora legible en español de Chile.
 const formatFecha = (str) => {
   if (!str) return "—"
   try {
@@ -29,16 +42,20 @@ const formatFecha = (str) => {
 }
 
 // Extrae el porcentaje final del resumen generado por el servidor
+// Busca el patrón "Resultado: NN%" dentro del texto de respuesta y devuelve el número (o null).
 const pctDeRespuesta = (respuesta) => {
   const m = /Resultado:\s*(\d+)%/.exec(respuesta || "")
   return m ? Number(m[1]) : null
 }
 
 // Tarjeta de una entrega (reutilizada dentro del acordeón por nivel)
+// Renderiza los datos de una entrega individual: tipo (ataque/defensa), nivel,
+// título, fechas, nota o estado "pendiente", feedback de IA, comentarios del
+// docente y métricas. Los colores del borde cambian según aprobado/reprobado/pendiente.
 function EntregaCard({ e }) {
-  const esDefensa = e.tipo === "defensa"
-  const pctFinal  = pctDeRespuesta(e.respuesta)
-  const evaluado  = e.nota != null
+  const esDefensa = e.tipo === "defensa"          // distingue el estilo ataque vs. defensa
+  const pctFinal  = pctDeRespuesta(e.respuesta)   // porcentaje extraído del resumen
+  const evaluado  = e.nota != null                // ¿ya tiene nota asignada?
   return (
     <div style={{
       background:"rgba(255,255,255,0.03)",
@@ -152,18 +169,20 @@ function EntregaCard({ e }) {
 
 export default function PaginaNotas() {
   const router = useRouter()
-  const [nombreUsuario, setNombreUsuario] = useState("")
-  const [entregas,      setEntregas]      = useState([])
-  const [cargando,      setCargando]      = useState(true)
-  const [nivelAbierto,  setNivelAbierto]  = useState(null)
+  const [nombreUsuario, setNombreUsuario] = useState("") // usuario en sesión
+  const [entregas,      setEntregas]      = useState([])  // todas las entregas del estudiante
+  const [cargando,      setCargando]      = useState(true) // true mientras se cargan
+  const [nivelAbierto,  setNivelAbierto]  = useState(null) // nivel expandido en el acordeón
   const [orden,         setOrden]         = useState("reciente")  // reciente | antiguo | nombre
 
+  // Al montar: verifica que haya sesión; si no, redirige al login.
   useEffect(() => {
     const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
     setNombreUsuario(u)
   }, [router])
 
+  // Cuando se conoce el usuario, descarga todas sus entregas desde el backend.
   useEffect(() => {
     if (!nombreUsuario) return
     setCargando(true)
@@ -174,6 +193,7 @@ export default function PaginaNotas() {
       .finally(() => setCargando(false))
   }, [nombreUsuario])
 
+  // Ordena una lista de entregas según el criterio elegido (nombre A–Z, o por fecha asc/desc).
   const ordenar = (lista, campoFecha, campoNombre = "titulo") => {
     const arr = [...lista]
     if (orden === "nombre") {
@@ -186,6 +206,7 @@ export default function PaginaNotas() {
   }
 
   // ── Entregas agrupadas por nivel (acordeón) ──
+  // porNivel = { nivel: [entregas...] }; niveles = lista ordenada de niveles presentes.
   const porNivel = {}
   entregas.forEach(e => { const n = e.nivel || 1; (porNivel[n] = porNivel[n] || []).push(e) })
   const niveles = Object.keys(porNivel).map(Number).sort((a, b) => a - b)
@@ -198,10 +219,10 @@ export default function PaginaNotas() {
     }
   }, [entregas]) // eslint-disable-line
 
-  // ── Resumen de entregas ──
-  const evaluadas    = entregas.filter(e => e.nota != null)
-  const aprobatorias = evaluadas.filter(e => e.nota >= 4)
-  const promedio     = evaluadas.length
+  // ── Resumen de entregas ──  (métricas mostradas en las tarjetas superiores)
+  const evaluadas    = entregas.filter(e => e.nota != null)     // entregas con nota
+  const aprobatorias = evaluadas.filter(e => e.nota >= 4)       // nota aprobatoria (≥4)
+  const promedio     = evaluadas.length                         // promedio de las evaluadas
     ? (evaluadas.reduce((s, e) => s + e.nota, 0) / evaluadas.length).toFixed(1)
     : null
 
@@ -261,7 +282,8 @@ export default function PaginaNotas() {
             </div>
           )}
 
-          {/* ── Resumen general ── */}
+          {/* ── Resumen general ──  Cuatro métricas: entregadas, evaluadas,
+              aprobadas y promedio (solo si hay entregas). */}
           {!cargando && entregas.length > 0 && (
             <section className="panel">
               <div style={{ display:"flex", gap:14, flexWrap:"wrap" }}>
@@ -286,7 +308,8 @@ export default function PaginaNotas() {
             </section>
           )}
 
-          {/* ── Entregas agrupadas por nivel (acordeón) ── */}
+          {/* ── Entregas agrupadas por nivel (acordeón) ──  Cada nivel es un
+              panel plegable; al abrirlo se listan sus entregas con <EntregaCard>. */}
           {!cargando && entregas.length > 0 && (
             <section className="panel" style={{ display:"flex", flexDirection:"column", gap:10 }}>
               <div style={{ fontSize:14, fontWeight:700, color:"#fff", marginBottom:4 }}>

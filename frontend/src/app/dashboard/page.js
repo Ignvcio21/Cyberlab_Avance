@@ -1,27 +1,47 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: /dashboard — Laboratorio de ataque (terminal interactiva)
+// -----------------------------------------------------------------------------
+// Es el corazón práctico de la plataforma para ejercicios de ATAQUE. El
+// estudiante elige un ejercicio publicado por el docente, el backend crea una
+// "sesión" (la fuente de verdad) y desde aquí el estudiante:
+//   • lee el escenario y el checklist de pasos,
+//   • escribe comandos en una terminal estilo Kali (el backend valida cada paso),
+//   • puede pedir pistas (penalizan el porcentaje),
+//   • ve un temporizador y, al terminar, un popup con su resultado y feedback.
+// IMPORTANTE: el checklist, el timer y la entrega los gestiona el backend; este
+// componente solo visualiza y sincroniza el estado de la sesión.
+// =============================================================================
+
 import { useEffect, useMemo, useState, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import BarraSuperior from "../componentes/BarraSuperior"
-import FeedbackCierre from "../componentes/FeedbackCierre"
+import FeedbackCierre from "../componentes/FeedbackCierre" // panel de orientación automática al cerrar
 
+// URL base del backend (variable de entorno o servidor de producción).
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
+// Cabeceras HTTP con el token de sesión, usadas en todas las peticiones autenticadas.
 const getAuthHeaders = () => ({
   "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
+// Las 10 secciones teóricas que componen cada nivel (se usan para mapear el
+// progreso de lectura traído del backend).
 const SECCIONES_INFO = [
   "introduccion","objetivos","fundamentos","metodologia","comandos",
   "evidencia","procedimiento","errores","buenas_practicas","criterio"
 ]
 
+// Nombres legibles de los 7 niveles del semestre.
 const NOMBRES_NIV = {
   1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración", 4: "Explotación",
   5: "Post-explotación", 6: "Avanzado", 7: "Operación completa",
 }
 
+// Convierte segundos a formato "m:ss" para el temporizador (ej: 125 → "2:05").
 const fmt = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
 
 // ================================================================
@@ -38,37 +58,39 @@ export default function Dashboard() {
   const cmdHistIdx   = useRef(-1)
   const cmdBorrador  = useRef("")
 
-  const [nombreUsuario, setNombreUsuario] = useState("")
-  const [stats,   setStats]   = useState({ total_eventos: 0, total_alertas: 0 })
-  const [mensaje, setMensaje] = useState("")
-  const [comando, setComando] = useState("")
+  const [nombreUsuario, setNombreUsuario] = useState("")  // usuario en sesión
+  const [stats,   setStats]   = useState({ total_eventos: 0, total_alertas: 0 }) // contadores de la cabecera
+  const [mensaje, setMensaje] = useState("")  // mensaje de error/aviso
+  const [comando, setComando] = useState("")  // texto actual del input de la terminal
 
+  // Líneas mostradas en la terminal (se va agregando salida con cada comando).
   const [historial, setHistorial] = useState([
     "CyberLab Terminal — modo kali-like",
     "Escribe 'help' para ver los comandos disponibles.",
   ])
 
   // ── Ejercicios del docente + sesión backend ──
-  const [ejerciciosDocente,   setEjerciciosDocente]   = useState([])
-  const [ejDocenteActivo,     setEjDocenteActivo]     = useState(null)
-  const [sesion,              setSesion]              = useState(null)
-  const [timerDocente,        setTimerDocente]        = useState(0)
-  const [pistaDocente,        setPistaDocente]        = useState("")
-  const [mostrarPista,        setMostrarPista]        = useState(false)
-  const [cargandoPista,       setCargandoPista]       = useState(false)
-  const [nivelDocenteAbierto, setNivelDocenteAbierto] = useState(1)
-  const [confirmEjDocente,    setConfirmEjDocente]    = useState(null)
-  const [popupFin,            setPopupFin]            = useState(false)
-  const [popupFinPct,         setPopupFinPct]         = useState(100)
-  const [entregados,          setEntregados]          = useState(new Set())
-  const [entregadosCargados,  setEntregadosCargados]  = useState(false)
-  const finalizadaRef = useRef(false)
+  const [ejerciciosDocente,   setEjerciciosDocente]   = useState([])    // ejercicios de ataque publicados
+  const [ejDocenteActivo,     setEjDocenteActivo]     = useState(null)  // ejercicio en curso
+  const [sesion,              setSesion]              = useState(null)  // estado de la sesión (checklist, %, etc.)
+  const [timerDocente,        setTimerDocente]        = useState(0)     // segundos restantes (countdown visual)
+  const [pistaDocente,        setPistaDocente]        = useState("")    // texto de la pista actual
+  const [mostrarPista,        setMostrarPista]        = useState(false) // mostrar/ocultar la caja de pista
+  const [cargandoPista,       setCargandoPista]       = useState(false) // pidiendo pista al backend
+  const [nivelDocenteAbierto, setNivelDocenteAbierto] = useState(1)     // nivel seleccionado en la grilla
+  const [confirmEjDocente,    setConfirmEjDocente]    = useState(null)  // ejercicio pendiente de confirmar en el modal
+  const [popupFin,            setPopupFin]            = useState(false) // mostrar popup de fin de ejercicio
+  const [popupFinPct,         setPopupFinPct]         = useState(100)   // porcentaje final mostrado en el popup
+  const [entregados,          setEntregados]          = useState(new Set()) // ids de ejercicios ya entregados
+  const [entregadosCargados,  setEntregadosCargados]  = useState(false) // ya se cargó la lista de entregados
+  const finalizadaRef = useRef(false) // evita disparar el cierre del ejercicio más de una vez
   const fasesPrevRef  = useRef([])  // fases del ataque ya anunciadas
 
   // ── Feedback automático de cierre (orientación para el estudiante) ──
   const [feedback,        setFeedback]        = useState(null)   // { texto, fuente }
   const [feedbackCargando, setFeedbackCargando] = useState(false)
 
+  // Pide al backend la orientación automática de cierre para un ejercicio.
   const cargarFeedback = async (ejId) => {
     if (!ejId) return
     setFeedback(null); setFeedbackCargando(true)
@@ -79,11 +101,11 @@ export default function Dashboard() {
     finally { setFeedbackCargando(false) }
   }
 
-  // ── Derivados de la sesión ──
-  const sesionItems   = sesion?.items || []
-  const pctDocente    = sesion?.porcentaje ?? 0
-  const ayudasDocente = sesion?.ayudas ?? 0
-  const sesionActiva  = sesion?.estado === "activa"
+  // ── Derivados de la sesión ──  (valores calculados a partir del estado de sesión)
+  const sesionItems   = sesion?.items || []          // pasos del checklist
+  const pctDocente    = sesion?.porcentaje ?? 0      // porcentaje completado
+  const ayudasDocente = sesion?.ayudas ?? 0          // nº de pistas pedidas
+  const sesionActiva  = sesion?.estado === "activa"  // ¿la sesión sigue en curso?
 
   // Layout responsivo: escenario + terminal lado a lado (50/50) en pantallas anchas; apilado en chicas
   const [anchoVentana, setAnchoVentana] = useState(1400)
@@ -94,10 +116,12 @@ export default function Dashboard() {
     window.addEventListener("resize", fn)
     return () => window.removeEventListener("resize", fn)
   }, [])
+  // ¿Mostrar escenario y terminal lado a lado? Solo con ejercicio activo y pantalla ancha.
   const ladoALado = !!(ejDocenteActivo && sesionActiva && anchoVentana > 980)
   // Alto máximo de cada columna: que ambas quepan en pantalla con scroll interno
   const altoPanel = Math.max(440, altoVentana - 180)
 
+  // Agrupa los ejercicios del docente por nivel: { nivel: [ejercicios...] }.
   const porNivel = useMemo(() => {
     const m = {}
     ejerciciosDocente.forEach(ej => { const n = ej.nivel || 1; if (!m[n]) m[n] = []; m[n].push(ej) })
@@ -105,17 +129,21 @@ export default function Dashboard() {
   }, [ejerciciosDocente])
 
   // ── LocalStorage: solo para sincronizar lectura de contenidos ──
+  // Clave única por usuario donde se guarda qué secciones teóricas ya leyó.
   const claveLS = useMemo(() => nombreUsuario ? `cyberlab_progreso_${nombreUsuario}` : null, [nombreUsuario])
 
+  // Lee el objeto de progreso de lectura desde localStorage.
   const leerLS = () => {
     if (!claveLS) return null
     try { return JSON.parse(localStorage.getItem(claveLS) || "null") } catch { return null }
   }
+  // Mezcla y guarda datos en el objeto de progreso de localStorage.
   const guardarLS = data => {
     if (!claveLS) return
     localStorage.setItem(claveLS, JSON.stringify({ ...(leerLS() || {}), ...data }))
   }
 
+  // Trae del backend qué secciones teóricas leyó el usuario y las refleja en localStorage.
   const cargarProgresoLecturaDesdeBackend = async (usuario) => {
     try {
       const token = sessionStorage.getItem("token")
@@ -127,16 +155,18 @@ export default function Dashboard() {
       const d = await r.json()
       const registros = Array.isArray(d.progreso) ? d.progreso : []
 
+      // Inicializa el mapa con todas las secciones de los 7 niveles en false.
       const nuevoMapa = {}
       for (let n = 1; n <= 7; n++) {
         nuevoMapa[`ataque_nivel${n}`] = {}
         for (const s of SECCIONES_INFO) nuevoMapa[`ataque_nivel${n}`][s] = false
       }
+      // Por cada lección completada, calcula a qué nivel y sección corresponde y la marca true.
       registros.forEach(reg => {
         if (reg.porcentaje >= 100 || reg.completado) {
           const idx    = reg.leccion_id - 1
-          const niv    = Math.floor(idx / SECCIONES_INFO.length) + 1
-          const secIdx = idx % SECCIONES_INFO.length
+          const niv    = Math.floor(idx / SECCIONES_INFO.length) + 1   // nivel = bloque de 10 secciones
+          const secIdx = idx % SECCIONES_INFO.length                   // sección dentro del nivel
           const sec    = SECCIONES_INFO[secIdx]
           if (niv >= 1 && niv <= 7 && sec) nuevoMapa[`ataque_nivel${niv}`][sec] = true
         }
@@ -147,6 +177,7 @@ export default function Dashboard() {
     }
   }
 
+  // Trae del backend los contadores globales (eventos y alertas) de la cabecera.
   const cargarStats = async () => {
     try {
       const d = await (await fetch(`${API_URL}/estadisticas`, {
@@ -159,6 +190,7 @@ export default function Dashboard() {
     } catch {}
   }
 
+  // Trae los ids de los ejercicios que el usuario ya entregó (para marcarlos en la lista).
   const cargarEntregados = useCallback(async () => {
     try {
       const r = await fetch(`${API_URL}/mis-entregas-docente`, { headers: getAuthHeaders() })
@@ -169,11 +201,15 @@ export default function Dashboard() {
   }, [])
 
   // ── Aplicar estado de sesión devuelto por el backend ───────────
+  // Recibe el estado de sesión del backend y actualiza la UI: anuncia nuevas
+  // fases del ataque en la terminal, sincroniza el timer y, si terminó, dispara
+  // el popup de cierre y el feedback. Es el punto central de sincronización.
   const aplicarSesion = useCallback((s) => {
     if (!s) return
     setSesion(s)
 
     // Fases del ataque en tiempo real (eventos reales del servidor)
+    // Compara con las fases anunciadas antes; si una cambió de estado, lo informa en la terminal.
     const fases = s.fases || []
     const prev = fasesPrevRef.current
     fases.forEach((f, i) => {
@@ -190,10 +226,12 @@ export default function Dashboard() {
     })
     fasesPrevRef.current = fases
 
+    // Si sigue activa, solo actualiza el contador con el tiempo restante real del servidor.
     if (s.estado === "activa") {
       setTimerDocente(s.restante_seg ?? 0)
       return
     }
+    // La sesión terminó: se ejecuta una sola vez (guardada con finalizadaRef).
     if (!finalizadaRef.current) {
       finalizadaRef.current = true
       setTimerDocente(0)
@@ -215,6 +253,7 @@ export default function Dashboard() {
   }, [])
 
   // ── Iniciar ejercicio (el backend crea la sesión) ──────────────
+  // Inicia un ejercicio: pide al backend crear la sesión y prepara la terminal.
   const iniciarEjDocente = async (ej) => {
     // Guarda: si este ejercicio ya está activo, no reiniciar (evita reset del temporizador)
     if (sesionActiva && ejDocenteActivo?.id === ej.id) return
@@ -294,10 +333,13 @@ export default function Dashboard() {
   }
 
   // ── Ejecutar comando (el backend valida el checklist) ──────────
+  // Envía el comando escrito a la terminal del backend, muestra su salida y
+  // sincroniza la sesión (que puede haber marcado pasos como completados).
   const ejecutarComando = async e => {
     e.preventDefault()
     if (!comando.trim()) return
     const cmd = comando.trim()
+    // Guarda el comando en el historial (↑↓) si no es igual al último.
     if (cmd && cmdHistRef.current[cmdHistRef.current.length - 1] !== cmd) {
       cmdHistRef.current.push(cmd)
     }
@@ -312,12 +354,14 @@ export default function Dashboard() {
       })
       const d   = await r.json()
       const sal = d?.salida ?? ""
+      // "__LIMPIAR__" es la señal especial del comando "clear": resetea la terminal.
       if (sal === "__LIMPIAR__") {
         setHistorial(["CyberLab Terminal — modo kali-like","Escribe 'help' para ver los comandos."])
       } else {
+        // Agrega el prompt ejecutado y cada línea de la salida.
         setHistorial(p => [...p, prompt, ...String(sal).split("\n")])
       }
-      if (d?.sesion) aplicarSesion(d.sesion)
+      if (d?.sesion) aplicarSesion(d.sesion) // el comando pudo completar pasos del checklist
       await cargarStats()
     } catch {
       setHistorial(p => [...p, prompt, "Error: no se pudo conectar con la terminal."])
@@ -325,22 +369,26 @@ export default function Dashboard() {
   }
 
   // ── Efectos ────────────────────────────────────────────────────
+  // Auto-scroll: mantiene la terminal pegada abajo cada vez que llega salida nueva.
   useEffect(() => {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight
   }, [historial])
 
+  // Al montar: verifica que haya sesión iniciada; si no, vuelve al login.
   useEffect(() => {
     const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
     setNombreUsuario(u)
   }, [router])
 
+  // Carga inicial de datos cuando se conoce el usuario, y refresco de stats cada 3s.
   useEffect(() => {
     if (!nombreUsuario) return
     cargarStats()
     cargarEntregados()
-    restaurarSesion()
+    restaurarSesion()                              // recupera una sesión activa si recargó
     cargarProgresoLecturaDesdeBackend(nombreUsuario)
+    // Carga los ejercicios de ataque publicados por el docente.
     fetch(`${API_URL}/ejercicios-docente/tipo/ataque`, { headers: getAuthHeaders() })
       .then(r => r.json()).then(d => { if (Array.isArray(d)) setEjerciciosDocente(d) }).catch(() => {})
     const iv = setInterval(cargarStats, 3000)
@@ -348,6 +396,7 @@ export default function Dashboard() {
   }, [nombreUsuario, cargarEntregados, restaurarSesion])
 
   // Countdown visual — el cierre real lo decide el servidor
+  // Resta 1s cada segundo; al llegar a 0 confirma la expiración con el servidor.
   useEffect(() => {
     if (!sesionActiva || !ejDocenteActivo) return
     const iv = setInterval(() => {
@@ -380,8 +429,8 @@ export default function Dashboard() {
   // ================================================================
   // RENDER
   // ================================================================
-  const listaNivel      = porNivel[nivelDocenteAbierto] || []
-  const entregadosNivel = listaNivel.filter(ej => entregados.has(ej.id)).length
+  const listaNivel      = porNivel[nivelDocenteAbierto] || []                       // ejercicios del nivel abierto
+  const entregadosNivel = listaNivel.filter(ej => entregados.has(ej.id)).length     // cuántos ya entregó en ese nivel
 
   return (
     <div className="dashboard-page">
@@ -389,7 +438,7 @@ export default function Dashboard() {
 
         <BarraSuperior paginaActiva="laboratorio" />
 
-        {/* ── PAGE HEADER ── */}
+        {/* ── PAGE HEADER ──  Título, usuario y tipo/nivel activo; muestra el mensaje de error si hay */}
         <header style={{ marginBottom: 4, display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
           <div>
             <h1 style={{ margin:"0 0 4px", fontSize:32, fontWeight:800, letterSpacing:"-1px", color:"#f5f5f7", lineHeight:1 }}>
@@ -422,7 +471,8 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* ── Niveles de entrenamiento + ejercicios docente ── */}
+        {/* ── Niveles de entrenamiento + ejercicios docente ──  Grilla de 7 niveles;
+            al elegir uno se listan sus ejercicios de ataque publicados. */}
         <div className="card-mock">
           {/* Card header */}
           <div className="card-mock-header">
@@ -502,7 +552,8 @@ export default function Dashboard() {
         {/* ── ESCENARIO + TERMINAL lado a lado (mitad y mitad cuando hay ejercicio activo) ── */}
         <div style={ladoALado ? { display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, alignItems:"stretch" } : undefined}>
 
-        {/* Escenario + checklist */}
+        {/* Escenario + checklist: contexto del ejercicio, barra de progreso, lista
+            de pasos (se marcan al ejecutar el comando correcto) y botón de pista. */}
         {ejDocenteActivo && sesionActiva && (
           <section className="mission-panel" style={ladoALado ? { maxHeight: altoPanel, overflowY: "auto" } : undefined}>
             <div className="panel-header">
@@ -592,7 +643,8 @@ export default function Dashboard() {
           </section>
         )}
 
-        {/* Terminal */}
+        {/* Terminal: emulador estilo Kali. Muestra el historial de comandos/salida
+            y un input que envía cada comando al backend (con historial ↑↓ tipo bash). */}
         <section style={{ background:"#0d1117", border:"1px solid rgba(57,211,83,0.18)", borderRadius:18, overflow:"hidden", boxShadow:"0 8px 40px rgba(0,0,0,0.60), 0 0 0 1px rgba(255,255,255,0.04)", display: ladoALado ? "flex" : undefined, flexDirection: ladoALado ? "column" : undefined }}>
           {/* Chrome bar */}
           <div style={{ background:"#161b22", padding:"11px 16px", display:"flex", alignItems:"center", gap:10, borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
@@ -619,6 +671,7 @@ export default function Dashboard() {
             <span className="terminal-prefix">cyberlab@kali:~$</span>
             <input className="terminal-input" value={comando}
               onChange={e => { setComando(e.target.value); cmdHistIdx.current = -1 }}
+              // Navegación por el historial de comandos con las flechas ↑ (anteriores) y ↓ (siguientes).
               onKeyDown={e => {
                 const hist = cmdHistRef.current
                 if (e.key === "ArrowUp") {
@@ -646,7 +699,9 @@ export default function Dashboard() {
 
         </div>
 
-        {/* ── Modal confirmación ejercicio docente ── */}
+        {/* ── Modal confirmación ejercicio docente ──  Antes de iniciar, muestra
+            los datos del ejercicio y advierte que el timer arranca y solo se
+            entrega una vez. Si ya fue entregado, muestra un aviso en su lugar. */}
         {confirmEjDocente && (() => {
           const yaEntregado = entregados.has(confirmEjDocente.id)
           return (
@@ -713,7 +768,9 @@ export default function Dashboard() {
           )
         })()}
 
-        {/* ── Popup ejercicio finalizado ── */}
+        {/* ── Popup ejercicio finalizado ──  Aparece al completar el checklist o
+            agotarse el tiempo: muestra el porcentaje final, mensaje según el caso
+            y la orientación automática de cierre (<FeedbackCierre>). */}
         {popupFin && (
           <div style={{
             position:"fixed", inset:0, background:"rgba(0,0,0,0.75)",

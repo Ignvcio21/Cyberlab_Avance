@@ -1,30 +1,49 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: /inicio — Página de entrada tras iniciar sesión
+// -----------------------------------------------------------------------------
+// Es la "home" del usuario autenticado y se adapta según su rol:
+//   • Estudiante: muestra su progreso por niveles (ataque/defensa), accesos a
+//     los módulos y atajos al dashboard.
+//   • Docente/Admin: muestra un panel resumen con estadísticas del curso
+//     (estudiantes, entregas por corregir, nota promedio, ejercicios) con
+//     contadores animados, accesos rápidos y la lista de entregas pendientes.
+// Protegida por <GuardSesion> (requiere sesión activa).
+// =============================================================================
+
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import GuardSesion from "../componentes/GuardSesion"
-import BarraSuperior from "../componentes/BarraSuperior"
-import TransicionPagina from "../componentes/TransicionPagina"
+import GuardSesion from "../componentes/GuardSesion"          // bloquea el acceso sin sesión
+import BarraSuperior from "../componentes/BarraSuperior"      // barra de navegación superior
+import TransicionPagina from "../componentes/TransicionPagina" // animación de entrada de página
 
+// Nombres legibles de cada uno de los 7 niveles del semestre.
 const NOMBRES_NIV = {
   1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración",
   4: "Explotación", 5: "Post-explotación", 6: "Avanzado", 7: "Operación completa"
 }
+// Crea un objeto de progreso "vacío" (0 completados / 0 totales) para los 7 niveles.
 const vacioNiveles = () => Object.fromEntries([1,2,3,4,5,6,7].map(n => [n, { completados: 0, total: 0 }]))
 
+// URL base del backend (variable de entorno o servidor de producción).
 const API_URL_INICIO = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
 export default function InicioPlataforma() {
   const router = useRouter()
-  const [nombreUsuario, setNombreUsuario] = useState("")
-  const [rolUsuario, setRolUsuario] = useState("")
-  const [progAtaque,  setProgAtaque]  = useState(vacioNiveles())
-  const [progDefensa, setProgDefensa] = useState(vacioNiveles())
-  const [entregasPend, setEntregasPend] = useState([])
-  const [statsDocente, setStatsDocente] = useState(null)
+  // --- Estado de la página ---
+  const [nombreUsuario, setNombreUsuario] = useState("")          // nombre a mostrar
+  const [rolUsuario, setRolUsuario] = useState("")                // estudiante / docente / admin
+  const [progAtaque,  setProgAtaque]  = useState(vacioNiveles())  // progreso en ejercicios de ataque
+  const [progDefensa, setProgDefensa] = useState(vacioNiveles())  // progreso en ejercicios de defensa
+  const [entregasPend, setEntregasPend] = useState([])            // entregas sin corregir (vista docente)
+  const [statsDocente, setStatsDocente] = useState(null)          // estadísticas del curso (vista docente)
+  // Versión "animada" de las estadísticas: arranca en 0 y sube hasta el valor real.
   const [statsAnimadas, setStatsAnimadas] = useState({ estudiantes: 0, pendientes: 0, notaPromedio: 0, ejercicios: 0 })
 
   // Contador animado easeOutCubic
+  // Anima un número desde 0 hasta `target` usando una curva easeOutCubic
+  // (rápido al inicio, suave al final). Actualiza la clave indicada de statsAnimadas.
   const animarContador = (clave, target, decimales = 0, duracion = 1100) => {
     if (!target || isNaN(Number(target))) return
     const num = Number(target)
@@ -39,6 +58,7 @@ export default function InicioPlataforma() {
   }
 
   // Lanzar animación cuando llegan los stats
+  // Cuando llegan las estadísticas del docente, dispara la animación de cada contador.
   useEffect(() => {
     if (!statsDocente) return
     animarContador("estudiantes",   statsDocente.estudiantes  ?? 0, 0, 900)
@@ -47,9 +67,11 @@ export default function InicioPlataforma() {
     animarContador("ejercicios",    statsDocente.ejercicios   ?? 0, 0, 800)
   }, [statsDocente])
 
+  // Carga el progreso del estudiante (ataque y defensa) desde el backend.
   const cargarProgreso = async (usuario, token) => {
     const API_URL = process.env.NEXT_PUBLIC_API_URL
     const headers = { "Authorization": `Bearer ${token}` }
+    // Normaliza la respuesta del backend a { nivel: {completados, total} } para los 7 niveles.
     const parsear = (d) => {
       const det = d?.detalle || {}
       // total = ejercicios realmente publicados por el docente en ese nivel
@@ -59,6 +81,7 @@ export default function InicioPlataforma() {
       }]))
     }
     try {
+      // Pide en paralelo el progreso de ataque y el de defensa.
       const [rA, rD] = await Promise.all([
         fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}?tipo=ataque`,  { headers }),
         fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}?tipo=defensa`, { headers }),
@@ -68,7 +91,9 @@ export default function InicioPlataforma() {
     } catch {}
   }
 
+  // Al montar: lee la sesión, carga el progreso y, si es docente/admin, las stats del panel.
   useEffect(() => {
+    // Datos de sesión guardados al iniciar sesión.
     const nombre  = sessionStorage.getItem("nombre_display") || sessionStorage.getItem("nombre_usuario") || ""
     const usuario = sessionStorage.getItem("nombre_usuario") || ""
     const r       = sessionStorage.getItem("rol_usuario") || ""
@@ -79,16 +104,20 @@ export default function InicioPlataforma() {
       const hdr = { "Authorization": `Bearer ${tok}` }
       // Si es docente/admin, cargar datos del panel
       if (r === "admin" || r === "docente") {
+        // Pide en paralelo: lista de usuarios, entregas y ejercicios publicados.
         Promise.all([
           fetch(`${API_URL_INICIO}/admin/usuarios`, { headers: hdr }).then(res => res.json()),
           fetch(`${API_URL_INICIO}/docente/entregas`, { headers: hdr }).then(res => res.json()),
           fetch(`${API_URL_INICIO}/ejercicios-docente`, { headers: hdr }).then(res => res.json()),
         ]).then(([us, it, ej]) => {
+          // Normaliza las respuestas (pueden venir como arreglo o como objeto).
           const usuarios = Array.isArray(us) ? us : []
           const intentos = it?.entregas || []
           const ejercicios = Array.isArray(ej) ? ej : (ej?.ejercicios || [])
+          // Entregas que aún no tienen evaluación → pendientes de corregir.
           const pendientes = intentos.filter(i => !i.tiene_evaluacion)
-          setEntregasPend(pendientes.slice(0, 4))
+          setEntregasPend(pendientes.slice(0, 4)) // solo se muestran las primeras 4
+          // Promedio de las entregas que ya tienen nota.
           const evaluados = intentos.filter(i => i.nota != null)
           const notaProm = evaluados.length
             ? (evaluados.reduce((s, i) => s + i.nota, 0) / evaluados.length).toFixed(1)
@@ -104,18 +133,24 @@ export default function InicioPlataforma() {
     }
   }, [])
 
-  const totalAtaque   = Object.values(progAtaque).reduce((s, v)  => s + (v.completados || 0), 0)
-  const totalDefensa  = Object.values(progDefensa).reduce((s, v) => s + (v.completados || 0), 0)
-  const dispAtaque    = Object.values(progAtaque).reduce((s, v)  => s + (v.total || 0), 0)
-  const dispDefensa   = Object.values(progDefensa).reduce((s, v) => s + (v.total || 0), 0)
-  const totalComp     = totalAtaque + totalDefensa
-  const totalDisp     = dispAtaque + dispDefensa
+  // --- Valores derivados del progreso (se recalculan en cada render) ---
+  const totalAtaque   = Object.values(progAtaque).reduce((s, v)  => s + (v.completados || 0), 0) // ejercicios de ataque completados
+  const totalDefensa  = Object.values(progDefensa).reduce((s, v) => s + (v.completados || 0), 0) // ejercicios de defensa completados
+  const dispAtaque    = Object.values(progAtaque).reduce((s, v)  => s + (v.total || 0), 0)        // total de ataque publicados
+  const dispDefensa   = Object.values(progDefensa).reduce((s, v) => s + (v.total || 0), 0)        // total de defensa publicados
+  const totalComp     = totalAtaque + totalDefensa // total completados (ambos tipos)
+  const totalDisp     = dispAtaque + dispDefensa   // total disponibles (ambos tipos)
+  // Nivel actual = primer nivel con ejercicios pendientes; si no hay, el primero con contenido; si nada, "1".
   const nivelActual   = Object.keys(progAtaque).find(n =>
     (progAtaque[n]?.total || 0) > (progAtaque[n]?.completados || 0)
   ) || Object.keys(progAtaque).find(n => (progAtaque[n]?.total || 0) > 0) || "1"
 
+  // ¿El usuario es docente o admin? Determina qué vista se renderiza.
   const esDocente = rolUsuario === "admin" || rolUsuario === "docente"
 
+  // ===========================================================================
+  // VISTA DOCENTE / ADMIN: panel resumen con estadísticas y entregas pendientes
+  // ===========================================================================
   if (esDocente) {
     return (
       <GuardSesion>
@@ -148,7 +183,7 @@ export default function InicioPlataforma() {
               </div>
             </section>
 
-            {/* ── STATS ── */}
+            {/* ── STATS ──  Cuatro tarjetas con métricas del curso (contadores animados) */}
             <section style={{ maxWidth: 1100, margin: "0 auto", padding: "0 32px 36px" }}>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 32 }}>
                 {[
@@ -165,19 +200,20 @@ export default function InicioPlataforma() {
                 ))}
               </div>
 
-              {/* ── ACCESOS RÁPIDOS ── */}
+              {/* ── ACCESOS RÁPIDOS ──  Tarjetas de navegación que cambian según el rol
+                  (admin ve gestión de usuarios/contenido; docente ve panel/ejercicios). */}
               <div style={{ fontSize: 16, fontWeight: 800, color: "#f5f5f7", marginBottom: 6 }}>Accesos rápidos</div>
               <div style={{ fontSize: 13, color: "#aeaeb2", marginBottom: 18 }}>Navega directamente a las secciones más usadas</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 32 }}>
                 {(rolUsuario === "admin"
                   ? [
-                      { icon: "👥", titulo: "Gestión de usuarios", desc: "Crea, edita y elimina cuentas. Cambia roles y busca por nombre o correo.", ruta: "/panel", flecha: "Ir a usuarios →" },
-                      { icon: "📝", titulo: "Editor de contenido", desc: "Edita los módulos teóricos de cada nivel directamente desde el panel.", ruta: "/panel", flecha: "Editar contenido →" },
-                      { icon: "📋", titulo: "Logs de auditoría", desc: "Revisa todas las acciones de usuarios con filtros y exportación CSV.", ruta: "/estadisticas", flecha: "Ver logs →" },
+                      { icon: "👥", titulo: "Gestión de usuarios", desc: "Crea, edita y elimina cuentas. Cambia roles y busca por nombre o correo.", ruta: "/panel?tab=usuarios", flecha: "Ir a usuarios →" },
+                      { icon: "📝", titulo: "Editor de contenido", desc: "Edita los módulos teóricos de cada nivel directamente desde el panel.", ruta: "/panel?tab=contenido", flecha: "Editar contenido →" },
+                      { icon: "📋", titulo: "Exportar notas e informes de los estudiantes", desc: "Descarga notas, listas e informes del curso en CSV y PDF.", ruta: "/estadisticas", flecha: "Exportar notas →" },
                     ]
                   : [
-                      { icon: "👤", titulo: "Panel de estudiantes", desc: "Revisa intentos, evalúa entregas y asigna notas a tus estudiantes.", ruta: "/panel", flecha: "Ir al panel →" },
-                      { icon: "⚔️", titulo: "Gestionar ejercicios", desc: "Crea, edita y administra los ejercicios del semestre con asistencia IA.", ruta: "/panel", flecha: "Ver ejercicios →" },
+                      { icon: "👤", titulo: "Panel de estudiantes", desc: "Revisa intentos, evalúa entregas y asigna notas a tus estudiantes.", ruta: "/panel?tab=estudiantes", flecha: "Ir al panel →" },
+                      { icon: "⚔️", titulo: "Gestionar ejercicios", desc: "Crea, edita y administra los ejercicios del semestre con asistencia IA.", ruta: "/panel?tab=ejercicios", flecha: "Ver ejercicios →" },
                       { icon: "◈", titulo: "Estadísticas del curso", desc: "Visualiza el rendimiento general, tasa de aprobación y exporta notas.", ruta: "/estadisticas", flecha: "Ver estadísticas →" },
                     ]
                 ).map(({ icon, titulo, desc, ruta, flecha }) => (
@@ -193,10 +229,11 @@ export default function InicioPlataforma() {
                 ))}
               </div>
 
-              {/* ── FILA INFERIOR ── */}
+              {/* ── FILA INFERIOR ──  Lista de entregas pendientes de corregir */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
 
-                {/* Entregas pendientes */}
+                {/* Entregas pendientes: muestra hasta 4 entregas sin evaluar con
+                    botón "Evaluar" que lleva al panel. Si no hay, muestra un check. */}
                 <div style={{ background: "#1c1c1e", border: "1px solid rgba(255,255,255,.10)", borderRadius: 14, padding: 22 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                     <div style={{ fontSize: 14, fontWeight: 700, color: "#f5f5f7" }}>Entregas pendientes</div>
@@ -237,13 +274,16 @@ export default function InicioPlataforma() {
     )
   }
 
+  // ===========================================================================
+  // VISTA ESTUDIANTE: progreso por niveles, módulos disponibles y accesos
+  // ===========================================================================
   return (
     <GuardSesion>
       <TransicionPagina>
         <main style={{ minHeight: "100vh", background: "#141414" }}>
           <BarraSuperior paginaActiva="inicio" />
 
-          {/* ── HERO ── */}
+          {/* ── HERO ──  Saludo personalizado y botones para continuar el nivel actual */}
           <section className="home-hero">
             <p className="home-eyebrow">Dashboard de progreso</p>
             <h1>
@@ -265,14 +305,15 @@ export default function InicioPlataforma() {
             </div>
           </section>
 
-          {/* ── PROGRESO ── */}
+          {/* ── PROGRESO ──  Dos columnas (Ataque y Defensa) con una barra de
+              porcentaje por cada uno de los 7 niveles. */}
           <section className="home-section-dark">
             <h2 className="home-section-title">Tu progreso</h2>
             <p className="home-section-sub">Avance por niveles del semestre</p>
 
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24 }}>
 
-              {/* ── Ataque ── */}
+              {/* ── Ataque ──  Barra de progreso por nivel para ejercicios de ataque */}
               <div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:12 }}>
                   <span style={{ fontSize:18 }}>⚔️</span>
@@ -297,7 +338,7 @@ export default function InicioPlataforma() {
                 </div>
               </div>
 
-              {/* ── Defensa ── */}
+              {/* ── Defensa ──  Misma barra de progreso por nivel para ejercicios de defensa */}
               <div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, marginBottom:12 }}>
                   <span style={{ fontSize:18 }}>🛡️</span>
@@ -325,7 +366,8 @@ export default function InicioPlataforma() {
             </div>
           </section>
 
-          {/* ── MÓDULOS ── */}
+          {/* ── MÓDULOS ──  Tarjetas clicables que llevan al dashboard / teoría /
+              notas. La última cambia entre "Evaluaciones" y "Panel" según el rol. */}
           <section className="home-section-light" style={{ borderTop: "1px solid #2c2c2e" }}>
             <h2 className="home-section-title">Módulos disponibles</h2>
             <p className="home-section-sub">Explora y practica cada área de ciberseguridad</p>

@@ -24,3 +24,5 @@ backend/cyberlab.db
 # secretos (NO subir)
 backend/.env
 .env
+.claude/
+*.bak

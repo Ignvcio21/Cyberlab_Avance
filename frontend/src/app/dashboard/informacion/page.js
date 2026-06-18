@@ -1,16 +1,30 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: /dashboard/informacion — Módulo teórico (lectura por niveles)
+// -----------------------------------------------------------------------------
+// Visor de contenido teórico en formato Markdown. El estudiante elige modo
+// (Ataque/Defensa), nivel (1–7) y sección (10 por nivel), y lee el material.
+// Una sección se marca como "Vista" automáticamente al hacer scroll hasta el
+// final. El progreso de ATAQUE se sincroniza con el backend; el de DEFENSA se
+// guarda solo en localStorage. El contenido puede venir editado desde el Panel
+// (override en BD) o de archivos .md estáticos en /public/contenidos.
+// =============================================================================
+
 import { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { marked } from "marked"
+import { marked } from "marked"  // convierte Markdown a HTML
 import GuardSesion from "../../componentes/GuardSesion"
 import BarraSuperior from "../../componentes/BarraSuperior"
 import TransicionPagina from "../../componentes/TransicionPagina"
 
+// Configura marked: desactiva el "mangle" de emails y los ids automáticos en headers.
 marked.setOptions({ mangle: false, headerIds: false })
 
+// URL base del backend (variable de entorno o servidor de producción).
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
+// Cabeceras HTTP con el token de sesión para peticiones autenticadas.
 const getAuthHeaders = () => ({
   "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
@@ -19,6 +33,7 @@ const getAuthHeaders = () => ({
 // ================================================================
 // DEFINICIÓN DE NIVELES — ATAQUE Y DEFENSA
 // ================================================================
+// Títulos de los 7 niveles del temario ofensivo (Red Team).
 const NIVELES_ATAQUE = [
   { id: 1, titulo: "Introducción y fundamentos" },
   { id: 2, titulo: "Fuerza bruta y control de acceso" },
@@ -29,6 +44,7 @@ const NIVELES_ATAQUE = [
   { id: 7, titulo: "Defensa: monitoreo, eventos y alertas" },
 ]
 
+// Títulos de los 7 niveles del temario defensivo (Blue Team / SOC).
 const NIVELES_DEFENSA = [
   { id: 1, titulo: "Monitoreo básico y orientación SOC" },
   { id: 2, titulo: "Detección de fuerza bruta" },
@@ -39,6 +55,7 @@ const NIVELES_DEFENSA = [
   { id: 7, titulo: "Defensa integral autónoma" },
 ]
 
+// Las 10 secciones que componen cada nivel (mismo orden en ataque y defensa).
 const SECCIONES = [
   { id: "introduccion",    titulo: "Introducción" },
   { id: "objetivos",       titulo: "Objetivos del nivel" },
@@ -60,12 +77,12 @@ export default function InformacionDashboard() {
   const searchParams = useSearchParams()
   const contenedorScrollRef = useRef(null)
 
-  const [nombreUsuario,    setNombreUsuario]    = useState("")
+  const [nombreUsuario,    setNombreUsuario]    = useState("")                // usuario en sesión
   const [modo,             setModo]             = useState("ataque")   // "ataque" | "defensa"
-  const [nivelLeccion,     setNivelLeccion]     = useState(1)
-  const [seccionLeccion,   setSeccionLeccion]   = useState("introduccion")
-  const [textoActual,      setTextoActual]      = useState("Cargando contenido...")
-  const [cargandoProgreso, setCargandoProgreso] = useState(true)
+  const [nivelLeccion,     setNivelLeccion]     = useState(1)                 // nivel seleccionado (1–7)
+  const [seccionLeccion,   setSeccionLeccion]   = useState("introduccion")   // sección seleccionada
+  const [textoActual,      setTextoActual]      = useState("Cargando contenido...") // Markdown a mostrar
+  const [cargandoProgreso, setCargandoProgreso] = useState(true)             // sincronizando progreso
 
   // Niveles desbloqueados — uno por modo
   const [desbloqueadosAtaque,  setDesbloqueadosAtaque]  = useState([1, 2])
@@ -85,15 +102,18 @@ export default function InformacionDashboard() {
   })
 
   // ── Claves LS ──────────────────────────────────────────────────
+  // Claves de localStorage donde se guarda el progreso (una por modo).
   const claveAtaque  = useMemo(() => nombreUsuario ? `cyberlab_progreso_${nombreUsuario}`         : null, [nombreUsuario])
   const claveDefensa = useMemo(() => nombreUsuario ? `cyberlab_info_defensa_${nombreUsuario}`     : null, [nombreUsuario])
-  const claveActiva  = modo === "ataque" ? claveAtaque : claveDefensa
+  const claveActiva  = modo === "ataque" ? claveAtaque : claveDefensa // la del modo actual
 
+  // Lee y parsea un objeto desde localStorage (null si no existe o falla).
   const leerLS = useCallback((clave) => {
     if (!clave) return null
     try { return JSON.parse(localStorage.getItem(clave) || "null") } catch { return null }
   }, [])
 
+  // Mezcla `data` con lo ya guardado en esa clave y lo persiste en localStorage.
   const guardarLS = useCallback((clave, data) => {
     if (!clave) return
     const anterior = (() => { try { return JSON.parse(localStorage.getItem(clave) || "null") } catch { return null } })() || {}
@@ -101,14 +121,17 @@ export default function InformacionDashboard() {
   }, [])
 
   // ── Niveles activos según modo ─────────────────────────────────
+  // Lista de niveles y desbloqueos correspondientes al modo seleccionado.
   const NIVELES_ACTIVOS = modo === "ataque" ? NIVELES_ATAQUE : NIVELES_DEFENSA
   const desbloqueadosActivos = modo === "ataque" ? desbloqueadosAtaque : desbloqueadosDefensa
 
   const NIVELES = NIVELES_ACTIVOS.map(n => ({ ...n, bloqueado: false }))
 
   // ── Progreso de lectura ────────────────────────────────────────
+  // Construye la clave del mapa de secciones vistas para un nivel (ej: "ataque_nivel3").
   const claveVista = (nivelId) => `${modo}_nivel${nivelId}`
 
+  // Devuelve el % de secciones leídas de un nivel (secciones vistas / total).
   const progresoLecturaNivel = (nivelId) => {
     const obj    = seccionesVistas[claveVista(nivelId)]
     const vistos = SECCIONES.reduce((acc, s) => acc + (obj?.[s.id] ? 1 : 0), 0)
@@ -116,6 +139,7 @@ export default function InformacionDashboard() {
   }
 
   // ── Marcar sección como vista ──────────────────────────────────
+  // Marca la sección actual como leída (estado + localStorage + backend si es ataque).
   const marcarSeccionVista = useCallback(() => {
     const clave   = claveVista(nivelLeccion)
     if (seccionesVistas?.[clave]?.[seccionLeccion]) return
@@ -130,6 +154,7 @@ export default function InformacionDashboard() {
   }, [nivelLeccion, seccionLeccion, seccionesVistas, claveActiva, modo])
 
   // ── Backend: cargar progreso de lectura de ataque ──────────────
+  // Trae del backend qué secciones de ataque ya leyó el usuario y reconstruye el mapa.
   const cargarProgresoAtaqueDesdeBackend = async (usuario) => {
     try {
       const r = await fetch(`${API_URL}/progreso/${encodeURIComponent(usuario)}`, {
@@ -144,11 +169,12 @@ export default function InformacionDashboard() {
         nuevoMapa[`ataque_nivel${n}`] = {}
         for (const s of SECCIONES) nuevoMapa[`ataque_nivel${n}`][s.id] = false
       }
+      // Cada lección completada se traduce a su nivel+sección dentro del mapa.
       registros.forEach(reg => {
         if (reg.porcentaje >= 100 || reg.completado) {
           const idx    = reg.leccion_id - 1
-          const niv    = Math.floor(idx / SECCIONES.length) + 1
-          const secIdx = idx % SECCIONES.length
+          const niv    = Math.floor(idx / SECCIONES.length) + 1  // nivel = bloque de 10 secciones
+          const secIdx = idx % SECCIONES.length                  // posición de la sección en el nivel
           const sec    = SECCIONES[secIdx]
           if (niv >= 1 && niv <= 7 && sec) nuevoMapa[`ataque_nivel${niv}`][sec.id] = true
         }
@@ -163,6 +189,7 @@ export default function InformacionDashboard() {
   }
 
   // ── Backend: cargar progreso defensa (localStorage como fuente) ──
+  // El progreso de defensa no usa backend: se lee solo desde localStorage.
   const cargarProgresoDefensaDesdeLS = () => {
     const raw = leerLS(claveDefensa)
     if (raw?.seccionesVistas) {
@@ -171,10 +198,12 @@ export default function InformacionDashboard() {
   }
 
   // ── Backend: enviar progreso (solo ataque usa backend) ──────────
+  // Reporta al backend que una sección de ataque quedó leída (porcentaje 100).
   const enviarProgresoABackend = async (nivel, seccion) => {
     if (!nombreUsuario || modo !== "ataque") return
     const secIdx = SECCIONES.findIndex(s => s.id === seccion)
     if (secIdx < 0) return
+    // Convierte (nivel, sección) en el id lineal de la lección que espera el backend.
     const leccionId = (nivel - 1) * SECCIONES.length + (secIdx + 1)
     try {
       await fetch(`${API_URL}/progreso/actualizar`, {
@@ -186,6 +215,8 @@ export default function InformacionDashboard() {
   }
 
   // ── Backend: niveles desbloqueados ataque ──────────────────────
+  // Determina qué niveles de ataque están desbloqueados: cada nivel se abre al
+  // completar el anterior.
   const cargarNivelesDesbloqueadosAtaque = async (usuario) => {
     try {
       const r = await fetch(`${API_URL}/progreso/laboratorio/${encodeURIComponent(usuario)}`, {
@@ -194,7 +225,7 @@ export default function InformacionDashboard() {
       if (!r.ok) return
       const d = await r.json()
       const completados = Array.isArray(d.niveles_completados) ? d.niveles_completados : []
-      const desbloqueados = [1]
+      const desbloqueados = [1] // el nivel 1 siempre está disponible
       for (let n = 2; n <= 7; n++) { if (completados.includes(n - 1)) desbloqueados.push(n) }
       setDesbloqueadosAtaque(desbloqueados)
       guardarLS(claveAtaque, { nivelesDesbloqueados: desbloqueados })
@@ -205,6 +236,8 @@ export default function InformacionDashboard() {
   }
 
   // ── Niveles desbloqueados defensa (desde progreso defensivo LS) ─
+  // Igual que el de ataque pero usando el progreso defensivo de localStorage:
+  // un nivel se abre al completar ≥5 ejercicios del anterior (mínimo nivel 2 libre).
   const cargarNivelesDesbloqueadosDefensa = (usuario) => {
     try {
       const raw = JSON.parse(localStorage.getItem(`cyberlab_defensa_${usuario}`) || "null")
@@ -221,6 +254,8 @@ export default function InformacionDashboard() {
   }
 
   // ── Cargar markdown ────────────────────────────────────────────
+  // Carga el contenido de la sección actual: primero busca un override editado
+  // desde el Panel (BD); si no hay, usa el archivo .md estático de /public.
   useEffect(() => {
     const cargar = async () => {
       setTextoActual("Cargando contenido...")
@@ -251,6 +286,8 @@ export default function InformacionDashboard() {
   }, [nivelLeccion, seccionLeccion, modo])
 
   // ── Scroll → marcar vista ──────────────────────────────────────
+  // Resetea el scroll al cambiar de sección y, cuando el usuario llega casi al
+  // final (<50px), marca la sección como vista.
   useEffect(() => {
     const contenedor = contenedorScrollRef.current
     if (!contenedor) return
@@ -264,6 +301,7 @@ export default function InformacionDashboard() {
   }, [nivelLeccion, seccionLeccion, modo, marcarSeccionVista])
 
   // ── Init usuario ───────────────────────────────────────────────
+  // Al montar: verifica que haya sesión; si no, redirige al login.
   useEffect(() => {
     const u = sessionStorage.getItem("nombre_usuario")
     if (!u) { router.push("/"); return }
@@ -271,6 +309,8 @@ export default function InformacionDashboard() {
   }, [router])
 
   // ── Init datos ─────────────────────────────────────────────────
+  // Al conocer el usuario: lee modo/nivel de la URL, carga progreso y desbloqueos
+  // de ambos modos y restaura la última posición de lectura.
   useEffect(() => {
     if (!nombreUsuario) return
     setCargandoProgreso(true)
@@ -303,6 +343,7 @@ export default function InformacionDashboard() {
   }, [nombreUsuario])
 
   // Resetear nivel/sección al cambiar de modo
+  // Cambia entre Ataque/Defensa y restaura la última posición guardada de ese modo.
   const cambiarModo = (nuevoModo) => {
     setModo(nuevoModo)
     setNivelLeccion(1)
@@ -316,10 +357,12 @@ export default function InformacionDashboard() {
     if (nuevoModo === "defensa") cargarNivelesDesbloqueadosDefensa(nombreUsuario)
   }
 
+  // Valores derivados para la cabecera: título de la sección y % del nivel actual.
   const tituloSeccionActual = SECCIONES.find(s => s.id === seccionLeccion)?.titulo || "—"
   const progresoNivelActual = progresoLecturaNivel(nivelLeccion)
 
   // Colores según modo
+  // Paleta dinámica: azul para ataque, cian/verde para defensa.
   const COLOR_MODO   = modo === "defensa" ? "var(--terciario)"     : "var(--primario)"
   const COLOR_DIM    = modo === "defensa" ? "var(--terciario-dim)" : "var(--primario-dim)"
   const BG_MODO      = modo === "defensa" ? "rgba(0,218,243,0.10)" : "rgba(0,163,255,0.10)"
@@ -377,7 +420,8 @@ export default function InformacionDashboard() {
               </button>
             </header>
 
-            {/* ── Selector de modo — pills redondeadas ── */}
+            {/* ── Selector de modo — pills redondeadas ──  Alterna entre el temario
+                de Ataque y el de Defensa (cambia colores, niveles y contenido). */}
             <div style={{
               display: "flex", gap: 8, padding: "12px 16px",
               background: "#1c1c1e", border: "1px solid #2c2c2e",
@@ -409,11 +453,13 @@ export default function InformacionDashboard() {
               </span>
             </div>
 
-            {/* ── Panel principal de contenido ── */}
+            {/* ── Panel principal de contenido ──  Tres columnas: niveles, secciones
+                y el contenido Markdown renderizado. */}
             <section className="learning-panel">
               <div className="info-layout">
 
-                {/* ── Lista de niveles ── */}
+                {/* ── Lista de niveles ──  Columna con los 7 niveles y su % de lectura.
+                    Al elegir un nivel se vuelve a la sección "Introducción". */}
                 <aside className="info-panel">
                   <div className="info-panel-header" style={{ background: `${BG_MODO}` }}>
                     <div>
@@ -459,7 +505,8 @@ export default function InformacionDashboard() {
                   </div>
                 </aside>
 
-                {/* ── Lista de secciones ── */}
+                {/* ── Lista de secciones ──  Columna con las 10 secciones del nivel;
+                    cada una indica si está "Vista" o "Pendiente". */}
                 <aside className="info-panel">
                   <div className="info-panel-header" style={{ background: BG_MODO }}>
                     <div>
@@ -495,7 +542,8 @@ export default function InformacionDashboard() {
                   </div>
                 </aside>
 
-                {/* ── Contenido markdown ── */}
+                {/* ── Contenido markdown ──  Columna principal: renderiza el texto
+                    de la sección (Markdown → HTML) y detecta el scroll para marcarla vista. */}
                 <section className="info-content">
                   <div className="info-content-header" style={{ background: BG_MODO }}>
                     <div className="info-content-left">

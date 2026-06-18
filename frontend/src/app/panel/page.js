@@ -1,15 +1,30 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: /panel — Panel de gestión (docente / admin)
+// -----------------------------------------------------------------------------
+// Centro de administración del curso. Organizado en pestañas:
+//   • "Estudiantes": lista de perfiles; al abrir uno, se ven sus entregas e
+//     intentos por nivel y se pueden EVALUAR (poner nota y comentarios).
+//   • "Ejercicios": crear (con asistencia de IA), listar, publicar/ocultar y
+//     eliminar ejercicios, y revisar sus entregas.
+//   • "Contenido": editor de los módulos teóricos (componente EditorContenido).
+//   • "Usuarios" (solo admin): crear/eliminar cuentas y cambiar roles.
+// Protegida por <GuardSesion> y por un chequeo de rol (solo docente/admin).
+// =============================================================================
+
 import { useEffect, useState, useMemo, useRef } from "react"
 import { useRouter } from "next/navigation"
 import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
 import ModalEntrega, { BadgeCierre, BarraResultado, fmtDur } from "../componentes/ModalEntrega"
-import EditorContenido from "../componentes/EditorContenido"
+import EditorContenido from "../componentes/EditorContenido" // editor del contenido teórico
 
+// URL base del backend (variable de entorno o servidor de producción).
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
 // Nombres de los niveles según el tipo de ejercicio (coinciden con los dashboards)
+// Se usan en el formulario de creación para mostrar el nombre del nivel elegido.
 const NOMBRES_NIVELES_FORM = {
   ataque: {
     1: "Fundamentos", 2: "Reconocimiento", 3: "Enumeración", 4: "Explotación",
@@ -21,11 +36,14 @@ const NOMBRES_NIVELES_FORM = {
   },
 }
 
+// Cabeceras HTTP con el token de sesión para las peticiones autenticadas.
 const getAuthHeaders = () => ({
   "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json"
 })
 
+// Normaliza el error que devuelve el backend (string, lista de validación u
+// objeto) a un texto legible para mostrar al usuario.
 function extraerError(data) {
   if (!data) return "Error inesperado"
   const d = data.detail ?? data
@@ -35,6 +53,7 @@ function extraerError(data) {
   return String(d)
 }
 
+// Formatea una fecha ISO a fecha+hora legible (es-CL); "—" si no hay valor.
 const formatFecha = (str) => {
   if (!str) return "—"
   try {
@@ -47,6 +66,7 @@ const formatFecha = (str) => {
 }
 
 
+// Nombres de los niveles tal como se muestran en el detalle del estudiante.
 const NOMBRES_NIVELES_PANEL = {
   1: "Fuerza Bruta — Fundamentos",
   2: "Escaneo de Puertos",
@@ -57,14 +77,19 @@ const NOMBRES_NIVELES_PANEL = {
   7: "Operación Completa",
 }
 
+// Deriva el nivel (1–7) de un intento de terminal a partir de su id (bloques de 5).
 const nivelDeEj = (ej_id) => ej_id ? Math.ceil(ej_id / 5) : 1
 
 const TODOS_LOS_NIVELES = [1, 2, 3, 4, 5, 6, 7]
 
+// Componente: detalle de un estudiante con sus intentos y entregas en un
+// acordeón por nivel. Muestra nota general, mini-stats y permite evaluar cada
+// entrega/intento mediante los callbacks recibidos.
 function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, ordenDesc, setOrdenDesc, onVolver, onEvaluar, onEvaluarEntrega }) {
-  const [nivelAbierto, setNivelAbierto] = useState(null)
+  const [nivelAbierto, setNivelAbierto] = useState(null) // nivel expandido en el acordeón
 
   // Unificar intentos (terminal) y entregas (docente) por nivel
+  // porNivel = { nivel: { intentos: [...], entregas: [...] } } para los 7 niveles.
   const porNivel = {}
   TODOS_LOS_NIVELES.forEach(n => { porNivel[n] = { intentos: [], entregas: [] } })
   intentos.forEach(it => {
@@ -78,6 +103,7 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
     porNivel[n].entregas.push(en)
   })
 
+  // Ordena una lista por fecha, según el sentido elegido (descendente/ascendente).
   const ordenar = (lista, campoFecha) => [...lista].sort((a, b) => {
     const da = new Date(a[campoFecha] || 0)
     const db = new Date(b[campoFecha] || 0)
@@ -99,7 +125,7 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
   const resultadoMedio = resultadosFinales.length
     ? Math.round(resultadosFinales.reduce((s, v) => s + v, 0) / resultadosFinales.length)
     : null
-  const sinEvaluar = entregas.filter(en => en.estado !== "evaluado").length
+  const sinEvaluar = entregas.filter(en => en.estado !== "evaluado").length // entregas pendientes de nota
 
   return (
     <div className="panel-body">
@@ -159,14 +185,14 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
 
       {cargando && <div className="panel-cargando">Cargando...</div>}
 
-      {/* Acordeón — siempre los 7 niveles */}
+      {/* Acordeón — siempre los 7 niveles (los vacíos aparecen atenuados) */}
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
         {TODOS_LOS_NIVELES.map(n => {
           const { intentos: listInt, entregas: listEnt } = porNivel[n]
-          const total   = listInt.length + listEnt.length
-          const eval_   = listInt.filter(it => it.tiene_evaluacion).length + listEnt.filter(en => en.nota != null).length
-          const vacio   = total === 0
-          const abierto = nivelAbierto === n
+          const total   = listInt.length + listEnt.length // total de elementos del nivel
+          const eval_   = listInt.filter(it => it.tiene_evaluacion).length + listEnt.filter(en => en.nota != null).length // cuántos ya evaluados
+          const vacio   = total === 0     // ¿el nivel no tiene nada?
+          const abierto = nivelAbierto === n // ¿está expandido?
 
           return (
             <div key={n} style={{
@@ -227,11 +253,11 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
                 )}
               </button>
 
-              {/* Contenido del nivel */}
+              {/* Contenido del nivel: entregas de ejercicios + intentos de terminal */}
               {abierto && (
                 <div style={{ padding:"12px 16px", display:"flex", flexDirection:"column", gap:8 }}>
 
-                  {/* Entregas de ejercicios docente — card de desempeño */}
+                  {/* Entregas de ejercicios docente — card de desempeño (clic = evaluar) */}
                   {ordenar(listEnt, "fecha_entrega").map(en => (
                     <div key={`ent-${en.id}`}
                       onClick={() => onEvaluarEntrega(en)}
@@ -305,7 +331,7 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
                     </div>
                   ))}
 
-                  {/* Intentos de ejercicios del terminal */}
+                  {/* Intentos de ejercicios del terminal (modo libre, sin ejercicio docente) */}
                   {ordenar(listInt, "fecha_inicio").map(it => (
                     <div key={`int-${it.intento_id}`}
                       className={`intento-card ${it.estado==="aprobado"?"intento-aprobado":""}`}
@@ -359,66 +385,73 @@ function PanelPerfilNiveles({ nombreEstudiante, intentos, entregas, cargando, or
 
 export default function PanelDocente() {
   const router = useRouter()
-  const [nombreUsuario, setNombreUsuario] = useState("")
-  const [rolUsuario,    setRolUsuario]    = useState("")
-  const [tab,           setTab]           = useState("estudiantes")
-  const [intentos,      setIntentos]      = useState([])
-  const [usuarios,      setUsuarios]      = useState([])
-  const [mensaje,       setMensaje]       = useState("")
-  const [cargando,      setCargando]      = useState(false)
-  const [perfilActivo,  setPerfilActivo]  = useState(null)
+  // --- Sesión y estado general ---
+  const [nombreUsuario, setNombreUsuario] = useState("")           // usuario en sesión
+  const [rolUsuario,    setRolUsuario]    = useState("")           // docente | admin
+  const [tab,           setTab]           = useState("estudiantes") // pestaña activa
+  const [intentos,      setIntentos]      = useState([])           // todas las entregas/intentos (vista estudiantes)
+  const [usuarios,      setUsuarios]      = useState([])           // lista de usuarios
+  const [mensaje,       setMensaje]       = useState("")           // mensaje de estado/error
+  const [cargando,      setCargando]      = useState(false)        // indicador de carga
+  const [perfilActivo,  setPerfilActivo]  = useState(null)         // estudiante abierto en detalle
   const [ordenDesc,     setOrdenDesc]     = useState(true)   // más reciente primero
 
-  const [modalEval,     setModalEval]     = useState(false)
-  const [intentoSel,    setIntentoSel]    = useState(null)
+  // --- Modal de evaluación de un intento de terminal ---
+  const [modalEval,     setModalEval]     = useState(false)  // visibilidad del modal
+  const [intentoSel,    setIntentoSel]    = useState(null)   // intento a evaluar
   const [nota,          setNota]          = useState("")     // sin valor por defecto
-  const [comentarios,   setComentarios]   = useState("")
+  const [comentarios,   setComentarios]   = useState("")     // comentarios del docente
 
-  const [nuevoU, setNuevoU] = useState("")
-  const [nuevaC, setNuevaC] = useState("")
-  const [nuevoR, setNuevoR] = useState("estudiante")
-  const [nuevoCorreo, setNuevoCorreo] = useState("")
-  const [confirmRolModal, setConfirmRolModal] = useState(null)
-  const [confirmEliminar, setConfirmEliminar] = useState(null)
+  // --- Formulario de crear usuario (admin) y confirmaciones ---
+  const [nuevoU, setNuevoU] = useState("")                  // nombre del nuevo usuario
+  const [nuevaC, setNuevaC] = useState("")                  // contraseña del nuevo usuario
+  const [nuevoR, setNuevoR] = useState("estudiante")        // rol del nuevo usuario
+  const [nuevoCorreo, setNuevoCorreo] = useState("")        // correo del nuevo usuario
+  const [confirmRolModal, setConfirmRolModal] = useState(null) // confirmación de cambio de rol
+  const [confirmEliminar, setConfirmEliminar] = useState(null) // confirmación de eliminación
   const [filtroEst,       setFiltroEst]       = useState("todos")   // todos | pendientes | aprobados | reprobados
-  const [busquedaEst,     setBusquedaEst]     = useState("")
+  const [busquedaEst,     setBusquedaEst]     = useState("")        // texto de búsqueda de estudiantes
 
-  const [editandoRolId,  setEditandoRolId]  = useState(null)
-  const [rolEditValor,   setRolEditValor]   = useState("")
-  const [entregasPerfil, setEntregasPerfil] = useState([])
+  const [editandoRolId,  setEditandoRolId]  = useState(null)  // usuario cuyo rol se edita en línea
+  const [rolEditValor,   setRolEditValor]   = useState("")    // valor temporal del rol en edición
+  const [entregasPerfil, setEntregasPerfil] = useState([])    // entregas del perfil abierto
 
   // ── Tab ejercicios docente ──
-  const [ejercicios,          setEjercicios]          = useState([])
-  const [entregasEj,          setEntregasEj]          = useState([])
-  const [ejSeleccionado,      setEjSeleccionado]      = useState(null)
+  const [ejercicios,          setEjercicios]          = useState([])     // ejercicios creados
+  const [entregasEj,          setEntregasEj]          = useState([])     // entregas del ejercicio seleccionado
+  const [ejSeleccionado,      setEjSeleccionado]      = useState(null)   // ejercicio cuyas entregas se ven
   const [vistaEjercicios,     setVistaEjercicios]     = useState("lista") // lista | crear | entregas
-  const [ejTitulo,            setEjTitulo]            = useState("")
-  const [ejDescripcion,       setEjDescripcion]       = useState("")
-  const [ejInstrucciones,     setEjInstrucciones]     = useState("")
-  const [ejItems,             setEjItems]             = useState([""])
-  const [ejTipo,              setEjTipo]              = useState("ataque")
-  const [ejNivel,             setEjNivel]             = useState(1)
-  const [ejTiempo,            setEjTiempo]            = useState(10)
-  const [ejFechaLimite,       setEjFechaLimite]       = useState("")
-  const [ejVisible,           setEjVisible]           = useState(false)
-  const [modalIa,             setModalIa]             = useState(false)
-  const [iaNumPuntos,         setIaNumPuntos]         = useState(4)
-  const [cargandoIa,          setCargandoIa]          = useState(false)
-  const [modalEntrega,        setModalEntrega]        = useState(null)
+  // --- Campos del formulario de creación de ejercicio ---
+  const [ejTitulo,            setEjTitulo]            = useState("")       // título (opcional)
+  const [ejDescripcion,       setEjDescripcion]       = useState("")       // descripción (obligatoria)
+  const [ejInstrucciones,     setEjInstrucciones]     = useState("")       // instrucciones extra
+  const [ejItems,             setEjItems]             = useState([""])     // puntos del checklist
+  const [ejTipo,              setEjTipo]              = useState("ataque") // ataque | defensa
+  const [ejNivel,             setEjNivel]             = useState(1)        // nivel 1–7
+  const [ejTiempo,            setEjTiempo]            = useState(10)       // tiempo límite (min)
+  const [ejFechaLimite,       setEjFechaLimite]       = useState("")       // fecha/hora límite de entrega
+  const [ejVisible,           setEjVisible]           = useState(false)    // publicar al crear
+  const [modalIa,             setModalIa]             = useState(false)    // modal de asistencia IA
+  const [iaNumPuntos,         setIaNumPuntos]         = useState(4)        // nº de puntos a generar con IA
+  const [cargandoIa,          setCargandoIa]          = useState(false)    // generando con IA
+  const [modalEntrega,        setModalEntrega]        = useState(null)     // entrega a evaluar (vista ejercicios)
   // Modal de detalle/evaluación compartido (perfil de estudiante)
-  const [detalleEntregaId,    setDetalleEntregaId]    = useState(null)
-  const [notaEntrega,         setNotaEntrega]         = useState("")
-  const [comentariosEntrega,  setComentariosEntrega]  = useState("")
+  const [detalleEntregaId,    setDetalleEntregaId]    = useState(null)     // id de entrega abierta en ModalEntrega
+  const [notaEntrega,         setNotaEntrega]         = useState("")        // nota en el modal de entrega
+  const [comentariosEntrega,  setComentariosEntrega]  = useState("")        // comentarios en el modal de entrega
   const creandoRef = useRef(false)  // evita doble creación de ejercicio
   // Chequeo en vivo: qué puntos del checklist son verificables por el laboratorio
   const [itemsVerif, setItemsVerif] = useState({})
 
-  const esAdmin = rolUsuario === "admin"
+  const esAdmin = rolUsuario === "admin" // atajo para mostrar funciones de admin
 
+  // Mientras se crea un ejercicio, valida (con debounce) qué ítems del checklist
+  // puede verificar automáticamente el laboratorio, para avisar al docente.
   useEffect(() => {
     if (vistaEjercicios !== "crear") return
     const textos = ejItems.map(s => s.trim())
     if (!textos.some(Boolean)) { setItemsVerif({}); return }
+    // Espera 600 ms tras dejar de escribir antes de consultar al backend.
     const t = setTimeout(async () => {
       try {
         const r = await fetch(`${API_URL}/ejercicios-docente/validar-items`, {
@@ -436,14 +469,22 @@ export default function PanelDocente() {
     return () => clearTimeout(t)
   }, [ejItems, vistaEjercicios])
 
+  // Control de acceso al montar: exige sesión y rol docente/admin; si no, redirige.
   useEffect(() => {
     const u = sessionStorage.getItem("nombre_usuario") || ""
     const r = sessionStorage.getItem("rol_usuario")    || ""
-    if (!u) { router.push("/"); return }
-    if (r !== "admin" && r !== "docente") { router.push("/inicio"); return }
+    if (!u) { router.push("/"); return }                                  // sin sesión → login
+    if (r !== "admin" && r !== "docente") { router.push("/inicio"); return } // sin permiso → inicio
     setNombreUsuario(u); setRolUsuario(r)
+    // Pestaña inicial desde la URL (?tab=...), para los accesos directos del inicio
+    const tabUrl = new URLSearchParams(window.location.search).get("tab")
+    const validas = r === "admin"
+      ? ["estudiantes", "ejercicios", "contenido", "usuarios"]
+      : ["estudiantes", "ejercicios", "contenido"]
+    if (tabUrl && validas.includes(tabUrl)) setTab(tabUrl)
   }, [router])
 
+  // Carga los datos correspondientes cada vez que cambia la pestaña activa.
   useEffect(() => {
     if (!nombreUsuario) return
     if (tab === "estudiantes") { cargarIntentos(); cargarUsuarios() }
@@ -451,6 +492,7 @@ export default function PanelDocente() {
     if (tab === "ejercicios")  cargarEjercicios()
   }, [tab, nombreUsuario])
 
+  // Carga todas las entregas/intentos del curso (para la vista de estudiantes).
   const cargarIntentos = async () => {
     setCargando(true); setMensaje("")
     try {
@@ -465,6 +507,7 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Carga la lista de todos los usuarios del sistema.
   const cargarUsuarios = async () => {
     setCargando(true); setMensaje("")
     try {
@@ -480,14 +523,17 @@ export default function PanelDocente() {
   }
 
   // Agrupar intentos por estudiante (incluye estudiantes sin intentos)
+  // Construye un perfil por estudiante con sus intentos y contadores agregados.
   const perfilesEstudiantes = useMemo(() => {
     const mapa = {}
     // Seed desde lista de usuarios estudiantes
+    // Primero crea una entrada vacía por cada estudiante (para que aparezcan aunque no tengan intentos).
     usuarios.filter(u => u.rol === "estudiante").forEach(u => {
       const key = u.nombre_usuario
       mapa[key] = { nombreUsuario: key, nombre: u.nombre || u.nombre_usuario, correo: u.correo || u.nombre_usuario, intentos: [], completados: 0, pendientes: 0, ayudas_total: 0 }
     })
     // Agregar intentos
+    // Luego suma a cada perfil sus intentos y actualiza completados/pendientes/ayudas.
     intentos.forEach(it => {
       const key = it.usuario || "desconocido"
       if (!mapa[key]) mapa[key] = { nombreUsuario: key, nombre: key, correo: key, intentos: [], completados: 0, pendientes: 0, ayudas_total: 0 }
@@ -496,10 +542,10 @@ export default function PanelDocente() {
       else mapa[key].pendientes++
       mapa[key].ayudas_total += it.ayudas_pedidas || 0
     })
-    return Object.values(mapa).sort((a, b) => a.nombre.localeCompare(b.nombre))
+    return Object.values(mapa).sort((a, b) => a.nombre.localeCompare(b.nombre)) // orden alfabético
   }, [intentos, usuarios])
 
-  // Promedio de notas de un perfil
+  // Promedio de notas de un perfil (null si no tiene ninguna evaluada).
   const promedioNota = (intentosLista) => {
     const ev = intentosLista.filter(it => it.nota != null)
     if (!ev.length) return null
@@ -519,17 +565,10 @@ export default function PanelDocente() {
     return lista
   }, [perfilesEstudiantes, filtroEst, busquedaEst])
 
-  // Intentos del perfil activo, ordenados
-  const intentosPerfil = useMemo(() => {
-    if (!perfilActivo) return []
-    const lista = intentos.filter(it => it.usuario === perfilActivo)
-    return [...lista].sort((a, b) => {
-      const da = new Date(a.fecha_inicio || 0)
-      const db = new Date(b.fecha_inicio || 0)
-      return ordenDesc ? db - da : da - db
-    })
-  }, [perfilActivo, intentos, ordenDesc])
+  // (Se eliminó `intentosPerfil`: era la lista legacy de "intentos" que duplicaba
+  //  cada entrega en un nivel equivocado. El detalle del perfil usa solo `entregasPerfil`.)
 
+  // Carga las entregas de ejercicios docente del estudiante abierto.
   const cargarEntregasPerfil = async (nombreUsuario) => {
     try {
       const r = await fetch(
@@ -541,6 +580,7 @@ export default function PanelDocente() {
     } catch { /* silencioso */ }
   }
 
+  // Abre el modal para evaluar un intento de terminal, precargando nota/comentarios.
   const abrirEval = (it) => {
     setMensaje("")
     setIntentoSel(it)
@@ -549,6 +589,7 @@ export default function PanelDocente() {
     setModalEval(true)
   }
 
+  // Envía al backend la evaluación (nota 1.0–7.0 + comentarios) de un intento.
   const enviarEval = async (e) => {
     e.preventDefault(); if (!intentoSel) return
     if (!nota.trim()) { setMensaje("Debes ingresar una nota antes de guardar."); return }
@@ -576,6 +617,7 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Cambia el rol de un usuario (admin) y refresca la lista.
   const cambiarRol = async (nombreU, nuevoRol) => {
     if (!nombreU || !nuevoRol) return
     setMensaje(""); setCargando(true)
@@ -593,6 +635,7 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Crea un nuevo usuario (solo admin) tras validar los campos del formulario.
   const crearUsuario = async (e) => {
     e.preventDefault(); if (!esAdmin) return
     if (!nuevoU.trim()) { setMensaje("Ingresa el nombre completo"); return }
@@ -618,6 +661,7 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Elimina un usuario del sistema (solo admin).
   const eliminarUsuario = async (nombreU) => {
     setMensaje(""); setCargando(true)
     try {
@@ -634,6 +678,7 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Carga la lista de ejercicios creados por el docente.
   const cargarEjercicios = async () => {
     setCargando(true)
     try {
@@ -645,6 +690,7 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Carga las entregas de un ejercicio concreto.
   const cargarEntregasEj = async (ejId) => {
     setCargando(true)
     try {
@@ -656,11 +702,13 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Crea un nuevo ejercicio con los datos del formulario (valida y arma el payload).
   const crearEjercicio = async (e) => {
     e.preventDefault()
     if (creandoRef.current) return  // evita doble envío (doble clic / reintento)
     if (!ejDescripcion.trim()) { setMensaje("La descripción es obligatoria"); return }
     if (!ejFechaLimite) { setMensaje("La fecha y hora límite de entrega es obligatoria"); return }
+    // Limpia los ítems vacíos y les asigna su número de orden.
     const itemsValidos = ejItems.map((d, i) => ({ descripcion: d.trim(), orden: i + 1 })).filter(it => it.descripcion)
     creandoRef.current = true
     setMensaje(""); setCargando(true); window.cyberProgress?.start()
@@ -690,6 +738,7 @@ export default function PanelDocente() {
     finally { creandoRef.current = false; setCargando(false); window.cyberProgress?.end() }
   }
 
+  // Elimina un ejercicio (pide confirmación nativa antes).
   const eliminarEjercicio = async (id) => {
     if (!confirm("¿Eliminar este ejercicio? Esta acción no se puede deshacer.")) return
     setMensaje(""); setCargando(true)
@@ -703,6 +752,7 @@ export default function PanelDocente() {
     finally { setCargando(false) }
   }
 
+  // Publica u oculta un ejercicio (alterna su visibilidad para los estudiantes).
   const toggleVisibilidad = async (id) => {
     try {
       const r = await fetch(`${API_URL}/ejercicios-docente/${id}/visibilidad`, { method: "PATCH", headers: getAuthHeaders() })
@@ -715,6 +765,8 @@ export default function PanelDocente() {
   }
 
   // Contexto por nivel para guiar la IA — comandos y dificultad apropiados
+  // Estos textos se envían al modelo para que genere ejercicios coherentes con
+  // el nivel: limita los comandos permitidos y fija la dificultad esperada.
   const CONTEXTO_NIVELES_IA = {
     ataque: {
       1: "Nivel 1 — Introducción y fundamentos. Dificultad MUY BAJA. Solo comandos básicos: show alerts, show events, block ip, whoami, status, ip a, ls. Conceptos: alertas IDS, log de eventos, bloqueo IP elemental. NO usar comandos de niveles superiores.",
@@ -736,10 +788,12 @@ export default function PanelDocente() {
     },
   }
 
+  // Pide a la IA que genere descripción, instrucciones y puntos del ejercicio,
+  // y rellena el formulario con la respuesta para que el docente la revise.
   const usarIa = async () => {
     setCargandoIa(true); setMensaje("")
     const nivelNum = Number(ejNivel) || 1
-    const contextoNivel = CONTEXTO_NIVELES_IA[ejTipo]?.[nivelNum] || ""
+    const contextoNivel = CONTEXTO_NIVELES_IA[ejTipo]?.[nivelNum] || "" // guía según nivel/tipo
     try {
       const r = await fetch(`${API_URL}/ejercicios-docente/ia-asistir`, {
         method: "POST", headers: getAuthHeaders(),
@@ -762,6 +816,7 @@ export default function PanelDocente() {
     finally { setCargandoIa(false) }
   }
 
+  // Evalúa una entrega de ejercicio docente (nota 1.0–7.0 + comentarios) y refresca las listas.
   const evaluarEntrega = async (e) => {
     e.preventDefault()
     if (!modalEntrega) return
@@ -790,7 +845,7 @@ export default function PanelDocente() {
 
           <BarraSuperior paginaActiva="panel" />
 
-          {/* ── HEADER estilo mockup ── */}
+          {/* ── HEADER estilo mockup ──  Título del panel + usuario y rol en sesión */}
           <header style={{
             background: "linear-gradient(135deg, #1c1c1e 0%, #242426 100%)",
             border: "1px solid #2c2c2e",
@@ -816,7 +871,7 @@ export default function PanelDocente() {
             </p>
           </header>
 
-          {/* ── TABS estilo mockup ── */}
+          {/* ── TABS estilo mockup ──  Navegación entre pestañas; "Usuarios" solo para admin */}
           <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
             {[
               { id:"estudiantes", label:"👤 Estudiantes", onClick: () => { setTab("estudiantes"); setPerfilActivo(null) } },
@@ -842,6 +897,7 @@ export default function PanelDocente() {
             ))}
           </div>
 
+          {/* Mensaje de estado/error global del panel. */}
           {mensaje && (
             <div style={{
               padding:"12px 16px", background:"rgba(41,151,255,0.08)",
@@ -850,7 +906,8 @@ export default function PanelDocente() {
             }}>{mensaje}</div>
           )}
 
-          {/* ── TAB: Lista de perfiles ── */}
+          {/* ── TAB: Lista de perfiles ──  Grilla de tarjetas de estudiantes con
+              buscador y filtros (todos / pendientes de nota / con o sin ejercicios). */}
           {tab === "estudiantes" && !perfilActivo && (
             <div className="card-mock" style={{ padding:"20px 24px" }}>
               <div className="panel-section-title">
@@ -922,11 +979,18 @@ export default function PanelDocente() {
             </div>
           )}
 
-          {/* ── TAB: Detalle de perfil — vista por niveles ── */}
+          {/* ── TAB: Detalle de perfil — vista por niveles ──  Acordeón con las
+              entregas del estudiante seleccionado (componente PanelPerfilNiveles).
+              NOTA: `intentos` se pasa vacío a propósito. Esa lista legacy (de
+              /docente/entregas) son las MISMAS entregas que ya llegan en `entregas`
+              (de /docente/estudiante/...), pero se dibujaban con el estilo viejo
+              "Terminal #N" y se ubicaban por ceil(id/5), duplicando cada entrega en
+              un nivel equivocado. Usar solo `entregas` (ubicada por su nivel real)
+              elimina el duplicado. */}
           {tab === "estudiantes" && perfilActivo && (
             <PanelPerfilNiveles
               nombreEstudiante={perfilesEstudiantes.find(p => (p.nombreUsuario || p.correo || p.nombre) === perfilActivo)?.nombre || perfilActivo}
-              intentos={intentosPerfil}
+              intentos={[]}
               entregas={entregasPerfil}
               cargando={cargando}
               ordenDesc={ordenDesc}
@@ -937,7 +1001,8 @@ export default function PanelDocente() {
             />
           )}
 
-          {/* Modal de detalle/evaluación de entrega (compartido con Estadísticas) */}
+          {/* Modal de detalle/evaluación de entrega (compartido con Estadísticas).
+              Al evaluar, recarga las entregas del perfil para reflejar la nota. */}
           {detalleEntregaId != null && (
             <ModalEntrega
               entregaId={detalleEntregaId}
@@ -946,11 +1011,11 @@ export default function PanelDocente() {
             />
           )}
 
-          {/* ── TAB: Ejercicios docente ── */}
+          {/* ── TAB: Ejercicios docente ──  Tres sub-vistas: lista, crear y entregas. */}
           {tab === "ejercicios" && (
             <div className="card-mock" style={{ padding:"20px 24px" }}>
 
-              {/* Sub-navegación */}
+              {/* Sub-navegación entre "Lista" y "+ Crear ejercicio" (oculta en la vista de entregas). */}
               {vistaEjercicios !== "entregas" && (
                 <div style={{ display:"flex", gap:8, marginBottom:16 }}>
                   <button
@@ -964,7 +1029,8 @@ export default function PanelDocente() {
                 </div>
               )}
 
-              {/* Lista de ejercicios */}
+              {/* Lista de ejercicios: cada uno con su tipo, nivel, plazo, toggle de
+                  visibilidad y botones para ver entregas o eliminar. */}
               {vistaEjercicios === "lista" && (
                 <>
                   <div className="panel-section-title">
@@ -977,9 +1043,10 @@ export default function PanelDocente() {
                   )}
                   <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                     {ejercicios.map(ej => {
+                      // Cálculo del estado del plazo de entrega para colorear el badge.
                       const ahora = new Date()
                       const limite = ej.fecha_limite ? new Date(ej.fecha_limite) : null
-                      const vencido = limite && ahora > limite
+                      const vencido = limite && ahora > limite                       // ya pasó la fecha
                       const hoy = limite && !vencido && (limite - ahora) < 86400000 // < 24h
                       const fmtLimite = limite ? limite.toLocaleString("es-CL", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) : null
                       return (
@@ -1098,7 +1165,8 @@ export default function PanelDocente() {
                 </>
               )}
 
-              {/* Crear ejercicio */}
+              {/* Crear ejercicio: formulario con tipo, nivel, tiempo, fecha límite,
+                  título (opcional, con asistencia IA), descripción y checklist de puntos. */}
               {vistaEjercicios === "crear" && (
                 <>
                   <div className="panel-section-title">Nuevo ejercicio</div>
@@ -1204,13 +1272,15 @@ export default function PanelDocente() {
                         style={{ resize:"vertical" }}
                       />
                     </div>
+                    {/* Checklist: cada punto se valida en vivo; si no es verificable
+                        por el laboratorio se marca en ámbar con una advertencia. */}
                     <div>
                       <label style={{ display:"block", fontSize:12, color:"var(--texto-apagado)", marginBottom:8, textTransform:"uppercase", letterSpacing:1 }}>
                         Puntos a evaluar (checklist)
                       </label>
                       {ejItems.map((item, i) => {
-                        const tieneTexto  = item.trim().length > 0
-                        const verificable = itemsVerif[i]
+                        const tieneTexto  = item.trim().length > 0   // ¿el punto tiene contenido?
+                        const verificable = itemsVerif[i]            // ¿lo puede validar el laboratorio?
                         return (
                           <div key={i} style={{ marginBottom:6 }}>
                             <div style={{ display:"flex", gap:6 }}>
@@ -1305,7 +1375,8 @@ export default function PanelDocente() {
                 </>
               )}
 
-              {/* Entregas de un ejercicio */}
+              {/* Entregas de un ejercicio: lista de estudiantes con su estado
+                  (evaluado/pendiente/no entregado) y botón para poner/editar nota. */}
               {vistaEjercicios === "entregas" && ejSeleccionado && (
                 <>
                   <button className="btn-volver" onClick={() => { setVistaEjercicios("lista"); setEjSeleccionado(null) }} style={{ marginBottom:12 }}>
@@ -1377,12 +1448,14 @@ export default function PanelDocente() {
             </div>
           )}
 
-          {/* ── TAB: Contenido informativo ── */}
+          {/* ── TAB: Contenido informativo ──  Editor de los módulos teóricos. */}
           {tab === "contenido" && <EditorContenido />}
 
-          {/* ── TAB: Usuarios ── */}
+          {/* ── TAB: Usuarios (solo admin) ──  Crear usuarios y administrar la
+              lista (cambiar rol o eliminar; el rol admin está protegido). */}
           {tab === "usuarios" && esAdmin && (
             <div className="panel-dos-col">
+              {/* Columna izquierda: formulario para crear un usuario nuevo. */}
               <div className="card-mock" style={{ padding:"20px 24px" }}>
                 <div className="panel-section-title">Crear usuario</div>
                 <form onSubmit={crearUsuario} style={{ display:"grid", gap:10 }}>
@@ -1401,6 +1474,7 @@ export default function PanelDocente() {
                   </button>
                 </form>
               </div>
+              {/* Columna derecha: tabla con todos los usuarios y sus acciones. */}
               <div className="card-mock" style={{ padding:"20px 24px" }}>
                 <div className="panel-section-title">
                   Usuarios registrados
@@ -1486,7 +1560,8 @@ export default function PanelDocente() {
         </div>
       </div>
 
-      {/* ── Modal evaluación ── */}
+      {/* ── Modal evaluación ──  Evaluar un intento de terminal: muestra el resumen
+          del intento y un formulario para la nota (1.0–7.0) y comentarios. */}
       {modalEval && intentoSel && (
         <div className="modal-fondo">
           <div className="modal-tarjeta" style={{ maxWidth:520 }}>
@@ -1573,7 +1648,7 @@ export default function PanelDocente() {
           </div>
         </div>
       )}
-      {/* ── Modal confirmar cambio de rol ── */}
+      {/* ── Modal confirmar cambio de rol ──  Confirmación antes de cambiar el rol de un usuario. */}
       {confirmRolModal && (
         <div className="modal-fondo" onClick={() => setConfirmRolModal(null)}>
           <div className="modal-tarjeta" style={{ maxWidth:420 }} onClick={e => e.stopPropagation()}>
@@ -1622,7 +1697,7 @@ export default function PanelDocente() {
         </div>
       )}
 
-      {/* ── Modal confirmar eliminar usuario ── */}
+      {/* ── Modal confirmar eliminar usuario ──  Confirmación destructiva antes de borrar la cuenta. */}
       {confirmEliminar && (
         <div className="modal-fondo" onClick={() => setConfirmEliminar(null)}>
           <div className="modal-tarjeta" style={{ maxWidth:420 }} onClick={e => e.stopPropagation()}>
@@ -1658,7 +1733,8 @@ export default function PanelDocente() {
         </div>
       )}
 
-      {/* ── Modal IA asistir ── */}
+      {/* ── Modal IA asistir ──  Pide cuántos puntos generar y lanza la IA para
+          rellenar el ejercicio (descripción, instrucciones y checklist). */}
       {modalIa && (
         <div className="modal-fondo">
           <div className="modal-tarjeta" style={{ maxWidth:420 }}>
@@ -1706,7 +1782,8 @@ export default function PanelDocente() {
         </div>
       )}
 
-      {/* ── Modal evaluar entrega ejercicio ── */}
+      {/* ── Modal evaluar entrega ejercicio ──  Evaluar la entrega de un ejercicio
+          docente: muestra la respuesta del alumno y el formulario de nota/comentarios. */}
       {modalEntrega && (
         <div className="modal-fondo">
           <div className="modal-tarjeta" style={{ maxWidth:500 }}>

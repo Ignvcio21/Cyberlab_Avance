@@ -1,9 +1,19 @@
 """
-main.py — CyberLab Backend
+main.py — CyberLab Backend (aplicación FastAPI y todos los endpoints)
+=============================================================================
+Punto de entrada del backend. Aquí se:
+  • crea la app FastAPI y se configuran CORS, rate limiting y la BD;
+  • definen TODOS los endpoints (rutas HTTP) que consume el frontend:
+    autenticación, perfil, terminales de ataque/defensa, ejercicios docente,
+    sesiones, evaluación, administración de usuarios y contenido teórico;
+  • integra la IA (OpenAI) para generar ejercicios, escenarios y pistas.
+La lógica pesada de cada dominio vive en módulos aparte (auth, sesiones,
+terminal_comandos, etc.); este archivo orquesta y expone esa lógica vía HTTP.
 Versión producción: JWT + Rate Limiting + CORS estricto + PostgreSQL
 """
 from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+# slowapi = limitador de peticiones (protege contra abuso/fuerza bruta).
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -68,8 +78,10 @@ from .auth import (
     obtener_bd,
 )
 
-load_dotenv()
+load_dotenv()   # carga variables del archivo .env (en desarrollo local)
+# Cliente de OpenAI usado para generar ejercicios, escenarios y pistas con IA.
 cliente_openai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+# Crea todas las tablas que aún no existan (a partir de los modelos).
 Base.metadata.create_all(bind=engine)
 
 
@@ -111,18 +123,22 @@ _migrar_columnas_nuevas()
 # proxy: se limita por usuario autenticado (sub del JWT) y, si no hay
 # token, por la IP real informada en X-Forwarded-For.
 def _clave_rate_limit(request: Request) -> str:
+    """Calcula la "clave" por la que se cuenta el rate limit de cada petición."""
     auth = request.headers.get("authorization", "")
+    # 1) Si hay token válido, se limita por usuario (sub del JWT).
     if auth.lower().startswith("bearer "):
         try:
-            payload = decodificar_token(auth[7:])
+            payload = decodificar_token(auth[7:])   # [7:] salta el prefijo "Bearer "
             sub = payload.get("sub")
             if sub:
                 return f"user:{sub}"
         except Exception:
             pass
+    # 2) Sin token: se usa la IP real (X-Forwarded-For lo pone el proxy de Railway).
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        return xff.split(",")[0].strip()
+        return xff.split(",")[0].strip()   # la primera IP de la lista es la del cliente
+    # 3) Último recurso: la IP directa de la conexión.
     return get_remote_address(request)
 
 
@@ -136,19 +152,22 @@ ORIGENES_PERMITIDOS = [
     FRONTEND_URL,
 ]
 
+# Instancia principal de la aplicación FastAPI.
 app = FastAPI(
     title="CyberLab API",
     version="2.0.0",
     docs_url=None,        # Deshabilitar Swagger en producción
-    redoc_url=None,
+    redoc_url=None,       # Deshabilitar ReDoc en producción
 )
 
-app.state.limiter = limiter
+app.state.limiter = limiter   # registra el limitador en la app
+# Maneja el error de "límite superado" devolviendo un 429 con mensaje claro.
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# CORS: define qué orígenes (dominios del frontend) pueden llamar a la API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ORIGENES_PERMITIDOS,
+    allow_origins=ORIGENES_PERMITIDOS,   # solo localhost y el frontend de producción
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
@@ -158,46 +177,57 @@ app.add_middleware(
 # ── Helpers internos ──────────────────────────────────────────────
 
 def registrar_accion(bd: Session, comando: str, resultado: str, usuario_id: int | None = None):
+    """Guarda en la BD el comando ejecutado y su resultado (auditoría / history)."""
     bd.add(AccionUsuario(comando=comando, resultado=resultado, usuario_id=usuario_id))
     bd.commit()
 
 
 def obtener_usuario_por_nombre(bd: Session, nombre: str) -> Usuario | None:
+    """Busca un usuario por su nombre de usuario (None si no existe)."""
     return bd.query(Usuario).filter(Usuario.nombre_usuario == nombre).first()
 
 
 def exigir_rol(usuario: Usuario | None, roles: list[str]):
+    """Lanza 403 si el usuario no existe o su rol no está entre los permitidos."""
     if not usuario or usuario.rol not in roles:
         raise HTTPException(status_code=403, detail="No autorizado")
 
 
 # ── Variables aleatorias para escenarios ─────────────────────────
+# Generadores que aportan datos variados a las narrativas de los escenarios,
+# para que cada instancia de un ejercicio se sienta distinta.
 
 def _ip():
+    """IP privada aleatoria para el atacante/objetivo del escenario."""
     return f"192.168.{random.randint(1,10)}.{random.randint(10,250)}"
 
 def _usuario():
+    """Nombre de cuenta objetivo elegido al azar."""
     return random.choice(["admin","root","operador","soporte","sysadmin","backup","deploy","usuario"])
 
 def _servicio():
+    """Servicio atacado elegido al azar."""
     return random.choice(["ssh","rdp","vpn","panel-web","ftp","smtp","api-rest"])
 
 def _puertos():
+    """Conjunto de puertos sondeados elegido al azar."""
     return random.choice([
         "22, 80, 443","22, 3389","21, 22, 80",
         "80, 443, 8080","25, 110, 143","3306, 5432","8000, 8080, 8443"
     ])
 
 def _empresa():
+    """Nombre de empresa ficticia para ambientar la narrativa."""
     return random.choice([
         "Tecnoserv S.A.","DataCore Ltda.","SecureNet Corp.",
         "Infranet Solutions","CloudOps Chile","NetGuard Sistemas","BankTech S.A."
     ])
 
 def _render(plantilla: str, vars: dict) -> str:
+    """Sustituye los marcadores {{clave}} de la plantilla por sus valores."""
     t = plantilla
     for k, v in vars.items():
-        t = t.replace("{{" + k + "}}", str(v))
+        t = t.replace("{{" + k + "}}", str(v))   # reemplaza cada {{k}} por v
     return t
 
 
@@ -231,22 +261,27 @@ PLANTILLAS_EP = [
 
 
 def _enriquecer_ia(narrativa_base: str, variables: dict, tipo: str) -> str:
+    """Usa la IA para reescribir una narrativa base más detallada y realista,
+    conservando exactamente los mismos datos. Si la IA falla, devuelve la base."""
     try:
         vars_str = "\n".join(f"- {k}: {v}" for k, v in variables.items())
+        # Prompt que instruye a la IA: mismo dato, sin inventar comandos, máx 6 frases.
         prompt = (
             f"Eres un instructor de ciberseguridad. Reescribe esta narrativa de laboratorio en español, "
             f"más detallada y realista (máximo 6 oraciones). Mantén exactamente los mismos datos "
             f"({', '.join(variables.values())}). No inventes comandos nuevos.\n\n"
             f"TIPO: {tipo}\nNARRATIVA:\n{narrativa_base}\nVARIABLES:\n{vars_str}\n\nSolo la narrativa:"
         )
+        # Llamada al modelo (gpt-4o-mini); temperature=0.7 da algo de variedad.
         resp = cliente_openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300, temperature=0.7
         )
         texto = resp.choices[0].message.content.strip()
-        return texto if texto else narrativa_base
+        return texto if texto else narrativa_base   # si vino vacío, usa la base
     except Exception as e:
+        # Cualquier fallo de IA no debe romper la creación del escenario.
         print(f"[IA] Narrativa no enriquecida: {e}")
         return narrativa_base
 
@@ -254,8 +289,10 @@ def _enriquecer_ia(narrativa_base: str, variables: dict, tipo: str) -> str:
 # ── Siembra de contenido ──────────────────────────────────────────
 
 def sembrar_contenido_si_falta(bd: Session):
+    """Crea la estructura inicial de cursos/capítulos/lecciones la primera vez
+    (si la BD aún no tiene ningún curso). Idempotente: no duplica si ya existe."""
     if bd.query(Curso).first():
-        return
+        return   # ya hay contenido; no se vuelve a sembrar
 
     # ── Curso ATAQUE ──
     curso_ataque = Curso(
@@ -324,6 +361,9 @@ def sembrar_contenido_si_falta(bd: Session):
 
 @app.on_event("startup")
 def iniciar_sistema():
+    """Inicialización al arrancar: aplica migraciones de columnas faltantes,
+    crea el usuario admin por defecto, limpia entregas duplicadas y siembra el
+    contenido inicial. Es tolerante a fallos (cada paso va en su try)."""
     # Migración DDL con AUTOCOMMIT para evitar transacciones abortadas en PostgreSQL
     dialect = engine.dialect.name
     ac_engine = engine.execution_options(isolation_level="AUTOCOMMIT")
@@ -403,11 +443,13 @@ def iniciar_sistema():
             except Exception:
                 pass
 
+    # --- Usuario administrador por defecto (credenciales desde el entorno) ---
     bd = SesionLocal()
     ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@gmail.com")
     ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
     admin = bd.query(Usuario).filter(Usuario.nombre_usuario == "admin").first()
     if not admin:
+        # No existe: se crea con la contraseña hasheada.
         bd.add(Usuario(
             nombre_usuario="admin",
             nombre="Administrador",
@@ -452,12 +494,14 @@ def iniciar_sistema():
 
 @app.get("/")
 def raiz():
+    """GET / → mensaje simple para confirmar que la API está operativa."""
     return {"mensaje": "CyberLab API v2.0 operativa"}
 
 
 # ── Health check ──────────────────────────────────────────────────
 @app.get("/health")
 def health():
+    """GET /health → comprobación de salud (lo usan Railway/monitorización)."""
     import os
     return {"status": "ok"}
 
@@ -466,26 +510,32 @@ def health():
 # ── Auth ──────────────────────────────────────────────────────────
 
 @app.post("/iniciar-sesion")
-@limiter.limit("10/minute")
+@limiter.limit("10/minute")   # máx 10 intentos/min por clave (anti fuerza bruta)
 def iniciar_sesion(request: Request, datos: SolicitudInicioSesion, bd: Session = Depends(obtener_bd)):
+    """POST /iniciar-sesion → valida correo+contraseña y devuelve un token JWT."""
     from sqlalchemy import func
     correo = (datos.correo or "").strip()
+    # Busca por correo en minúsculas (comparación insensible a mayúsculas).
     u = bd.query(Usuario).filter(func.lower(Usuario.correo) == correo.lower()).first()
     if not u or not verificar_contrasena(datos.contrasena, u.contrasena):
+        # Mismo mensaje para "no existe" y "clave mala": no revela qué correos existen.
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
     # Migración automática: cuentas antiguas con contraseña en texto plano
     # se re-cifran con bcrypt en su primer login exitoso
-    if not (u.contrasena or "").startswith("$2"):
+    if not (u.contrasena or "").startswith("$2"):   # los hashes bcrypt empiezan por "$2"
         u.contrasena = hashear_contrasena(datos.contrasena)
         bd.commit()
+    # Token con el usuario (sub) y su rol; el frontend lo guarda y lo reenvía.
     token = crear_token({"sub": u.nombre_usuario, "rol": u.rol})
     return {"mensaje": "Inicio de sesión correcto", "nombre_usuario": u.nombre_usuario, "nombre": u.nombre, "rol": u.rol, "token": token}
 
 
 @app.post("/registrar")
-@limiter.limit("5/minute")
+@limiter.limit("5/minute")   # máx 5 registros/min por clave
 def registrar_estudiante(request: Request, datos: SolicitudRegistroEstudiante, bd: Session = Depends(obtener_bd)):
+    """POST /registrar → crea una cuenta de estudiante (registro público)."""
     correo = datos.correo.strip().lower()
+    # El correo no puede estar repetido.
     if bd.query(Usuario).filter(Usuario.correo == correo).first():
         raise HTTPException(status_code=400, detail="El correo ya está registrado")
     bd.add(Usuario(
@@ -503,8 +553,9 @@ def registrar_estudiante(request: Request, datos: SolicitudRegistroEstudiante, b
 
 @app.post("/admin/crear-usuario")
 def admin_crear_usuario(datos: SolicitudCrearUsuario, usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd)):
+    """POST /admin/crear-usuario → un admin crea un estudiante o docente. (Depends(solo_admin) exige rol admin.)"""
     rol = (datos.rol or "").strip().lower()
-    if rol not in ["estudiante", "docente"]:
+    if rol not in ["estudiante", "docente"]:   # un admin no se crea desde aquí
         raise HTTPException(status_code=400, detail="Rol inválido")
     correo = datos.correo.strip().lower()
     if bd.query(Usuario).filter(Usuario.correo == correo).first():
@@ -516,6 +567,7 @@ def admin_crear_usuario(datos: SolicitudCrearUsuario, usuario_actual: Usuario = 
 
 @app.get("/admin/usuarios", response_model=list[RespuestaUsuario])
 def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd), q: str = ""):
+    """GET /admin/usuarios → lista usuarios (docente ve solo estudiantes; admin, todos). `q` busca por texto."""
     query = bd.query(Usuario)
     # El docente solo puede ver a los estudiantes; el admin ve a todos los usuarios.
     if usuario_actual.rol != "admin":
@@ -530,6 +582,7 @@ def admin_listar_usuarios(usuario_actual: Usuario = Depends(solo_docente), bd: S
 
 @app.post("/admin/cambiar-rol")
 def admin_cambiar_rol(datos: SolicitudCambiarRol, usuario_actual: Usuario = Depends(solo_admin), bd: Session = Depends(obtener_bd)):
+    """POST /admin/cambiar-rol → cambia el rol de un usuario (solo admin)."""
     rol = (datos.nuevo_rol or "").strip().lower()
     if rol not in ["estudiante", "docente", "admin"]:
         raise HTTPException(status_code=400, detail="Rol inválido — usa: estudiante, docente o admin")
@@ -547,6 +600,8 @@ def admin_eliminar_usuario(
     usuario_actual: Usuario = Depends(solo_admin),
     bd: Session = Depends(obtener_bd)
 ):
+    """DELETE /admin/eliminar-usuario → borra un usuario y sus datos asociados (solo admin).
+    Protege contra auto-eliminación y contra borrar al único admin."""
     # Protecciones básicas
     if datos.nombre_usuario == usuario_actual.nombre_usuario:
         raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
@@ -582,13 +637,15 @@ def admin_eliminar_usuario(
 
 @app.post("/admin/curso")
 def admin_crear_curso(datos: SolicitudCrearCurso, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    """POST /admin/curso → crea un curso (docente/admin)."""
     curso = Curso(titulo=datos.titulo, descripcion=datos.descripcion, nivel=datos.nivel, activo=True, creado_por_usuario_id=usuario_actual.id)
-    bd.add(curso); bd.commit(); bd.refresh(curso)
+    bd.add(curso); bd.commit(); bd.refresh(curso)   # refresh() recarga el id autogenerado
     return {"mensaje": "Curso creado", "curso_id": curso.id}
 
 
 @app.post("/admin/capitulo")
 def admin_crear_capitulo(datos: SolicitudCrearCapitulo, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    """POST /admin/capitulo → crea un capítulo dentro de un curso existente."""
     if not bd.query(Curso).filter(Curso.id == datos.curso_id).first():
         raise HTTPException(status_code=404, detail="Curso no encontrado")
     cap = Capitulo(curso_id=datos.curso_id, titulo=datos.titulo, orden=datos.orden)
@@ -598,6 +655,7 @@ def admin_crear_capitulo(datos: SolicitudCrearCapitulo, usuario_actual: Usuario 
 
 @app.post("/admin/leccion")
 def admin_crear_leccion(datos: SolicitudCrearLeccion, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    """POST /admin/leccion → crea una lección dentro de un capítulo existente."""
     if not bd.query(Capitulo).filter(Capitulo.id == datos.capitulo_id).first():
         raise HTTPException(status_code=404, detail="Capítulo no encontrado")
     lec = Leccion(capitulo_id=datos.capitulo_id, titulo=datos.titulo, tipo=datos.tipo, orden=datos.orden, ruta_contenido=datos.ruta_contenido)
@@ -610,15 +668,18 @@ def admin_crear_leccion(datos: SolicitudCrearLeccion, usuario_actual: Usuario = 
 
 @app.post("/progreso/actualizar")
 def actualizar_progreso(datos: SolicitudActualizarProgreso, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """POST /progreso/actualizar → registra el % leído de una lección (solo sube, no baja)."""
     if not bd.query(Leccion).filter(Leccion.id == datos.leccion_id).first():
         raise HTTPException(status_code=404, detail="Lección no encontrada")
-    pct = max(0, min(100, int(datos.porcentaje)))
+    pct = max(0, min(100, int(datos.porcentaje)))   # acota el porcentaje a [0,100]
     reg = bd.query(ProgresoUsuario).filter(ProgresoUsuario.usuario_id == usuario_actual.id, ProgresoUsuario.leccion_id == datos.leccion_id).first()
     if reg:
+        # Ya existe registro: solo se actualiza si el nuevo % es mayor (no retrocede).
         if pct > reg.porcentaje: reg.porcentaje = pct
         reg.completado = reg.porcentaje >= 100
         bd.commit()
         return {"mensaje": "Progreso actualizado", "porcentaje": reg.porcentaje, "completado": reg.completado}
+    # No existe: se crea el registro de progreso.
     reg = ProgresoUsuario(usuario_id=usuario_actual.id, leccion_id=datos.leccion_id, porcentaje=pct, completado=pct >= 100)
     bd.add(reg); bd.commit()
     return {"mensaje": "Progreso creado", "porcentaje": reg.porcentaje, "completado": reg.completado}
@@ -626,6 +687,7 @@ def actualizar_progreso(datos: SolicitudActualizarProgreso, usuario_actual: Usua
 
 @app.get("/progreso/{nombre_usuario}")
 def obtener_progreso_usuario(nombre_usuario: str, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """GET /progreso/{usuario} → progreso de lectura de un usuario (él mismo o docente/admin)."""
     # Solo el propio usuario o docente/admin puede ver el progreso
     if usuario_actual.nombre_usuario != nombre_usuario and usuario_actual.rol not in ["admin", "docente"]:
         raise HTTPException(status_code=403, detail="No autorizado")
@@ -646,13 +708,15 @@ def obtener_niveles_desbloqueados(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd)
 ):
+    """GET /progreso/laboratorio/{usuario} → qué niveles completó (entregas/total) por tipo.
+    Un nivel está "completo" si entregó todos los ejercicios publicados de ese nivel."""
     if usuario_actual.nombre_usuario != nombre_usuario and usuario_actual.rol not in ["admin", "docente"]:
         raise HTTPException(status_code=403, detail="No autorizado")
     u = bd.query(Usuario).filter(Usuario.nombre_usuario == nombre_usuario).first()
     if not u: raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-    conteo = {n: 0 for n in range(1, 8)}
-    totales = {n: 0 for n in range(1, 8)}
+    conteo = {n: 0 for n in range(1, 8)}    # entregas del usuario por nivel
+    totales = {n: 0 for n in range(1, 8)}   # ejercicios publicados por nivel
 
     # Total real de ejercicios publicados por nivel (filtrado por tipo si se indica)
     q_ej = bd.query(EjercicioDocente).filter(EjercicioDocente.activo == True)
@@ -807,6 +871,7 @@ def docente_listar_entregas(usuario_actual: Usuario = Depends(solo_docente), bd:
 
 @app.get("/docente/intentos")
 def docente_listar_intentos(usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    """GET /docente/intentos → (obsoleto) devuelve lista vacía; ver /docente/entregas."""
     # Sistema de intentos histórico descontinuado: las evaluaciones vigentes
     # viven en entregas_ejercicio_docente (ver /docente/entregas).
     return {"intentos": []}
@@ -814,6 +879,8 @@ def docente_listar_intentos(usuario_actual: Usuario = Depends(solo_docente), bd:
 
 @app.get("/mis-entregas-docente")
 def mis_entregas_docente(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """GET /mis-entregas-docente → ids de ejercicios que el usuario ya entregó
+    (para marcarlos en el dashboard). Excluye los reabiertos para reintento."""
     # Las entregas con reintento habilitado NO bloquean: el ejercicio vuelve
     # a estar disponible para que el estudiante lo rinda de nuevo.
     entregas = bd.query(EntregaEjercicioDocente).filter(
@@ -825,12 +892,14 @@ def mis_entregas_docente(usuario_actual: Usuario = Depends(obtener_usuario_actua
 
 @app.get("/mis-evaluaciones")
 def mis_evaluaciones(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """GET /mis-evaluaciones → (obsoleto) lista vacía; ver /mis-entregas-docente."""
     # Sistema de intentos histórico descontinuado (ver /mis-entregas-docente).
     return {"intentos": []}
 
 
 @app.post("/docente/evaluar")
 def docente_evaluar_intento(datos: SolicitudEvaluarIntento, usuario_actual: Usuario = Depends(solo_docente), bd: Session = Depends(obtener_bd)):
+    """POST /docente/evaluar → (obsoleto) responde 410; evaluar desde las entregas."""
     # Sistema de intentos histórico descontinuado: la evaluación vigente se
     # realiza sobre las entregas (ver /ejercicios-docente/entregas/{id}/evaluar).
     raise HTTPException(status_code=410, detail="El sistema de intentos fue descontinuado; evalúa desde las entregas.")
@@ -845,6 +914,8 @@ def docente_evaluar_intento(datos: SolicitudEvaluarIntento, usuario_actual: Usua
 
 @app.get("/estadisticas")
 def obtener_estadisticas(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """GET /estadisticas → contadores y últimos eventos/alertas del laboratorio del usuario.
+    El dashboard lo llama en bucle: aprovecha para hacer avanzar las fases del ataque."""
     # El polling del dashboard mantiene vivo el ataque en tiempo real
     materializar_fases_usuario(bd, usuario_actual.id)
     return {
@@ -877,10 +948,13 @@ def _construir_contexto_real(bd: Session, usuario_id: int) -> str:
 
 
 @app.post("/terminal", response_model=RespuestaTerminal)
-@limiter.limit("60/minute")
+@limiter.limit("60/minute")   # máx 60 comandos/min por usuario
 def ejecutar_terminal(request: Request, datos: SolicitudTerminal, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
-    materializar_fases_usuario(bd, usuario_actual.id)
-    resp = _terminal_ataque(datos, usuario_actual, bd)
+    """POST /terminal → ejecuta un comando en la terminal de ATAQUE.
+    Devuelve la salida y el estado actualizado de la sesión (checklist/timer)."""
+    materializar_fases_usuario(bd, usuario_actual.id)             # avanza el ataque en tiempo real
+    resp = _terminal_ataque(datos, usuario_actual, bd)           # procesa el comando
+    # Comprueba si el comando completó algún paso del checklist de la sesión activa.
     info_sesion = evaluar_comando_en_sesion(bd, usuario_actual.id, datos.comando or "", resp.get("salida", ""))
     if info_sesion:
         resp["sesion"] = info_sesion
@@ -888,9 +962,12 @@ def ejecutar_terminal(request: Request, datos: SolicitudTerminal, usuario_actual
 
 
 def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Session) -> dict:
+    """Procesa un comando de ataque: primero los handlers locales (patrón Command)
+    y, si ninguno calza, lo delega a la IA simulando una terminal Kali real."""
     raw = (datos.comando or "").strip()
 
     def guardar(res: str):
+        # Helper local: registra el comando y si fue OK o ERROR (para history/auditoría).
         bd.add(AccionUsuario(comando=raw, resultado=res, usuario_id=usuario_actual.id))
         bd.commit()
 
@@ -899,7 +976,7 @@ def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Sess
 
     # Patrón Command: cada comando es un handler registrado; lo que no
     # está implementado se delega en la IA con contexto real (fallback).
-    cmd_l = ALIAS_ATAQUE.get(raw.lower().strip(), raw.lower().strip())
+    cmd_l = ALIAS_ATAQUE.get(raw.lower().strip(), raw.lower().strip())   # resuelve alias en español
     sesion_activa = obtener_sesion_activa(bd, usuario_actual.id)
     salida = despachar(REGISTRO_ATAQUE, bd, usuario_actual, cmd_l,
                        ctx={"sesion": sesion_activa})
@@ -907,6 +984,8 @@ def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Sess
         guardar("OK"); return {"salida": salida}
 
     # ── Todo lo demás → OpenAI con contexto real ─────────────────
+    # Comando no implementado: la IA simula la salida de Kali usando el contexto
+    # real del laboratorio para que la respuesta sea coherente con el escenario.
     try:
         contexto_real = _construir_contexto_real(bd, usuario_actual.id)
 
@@ -946,6 +1025,7 @@ def _terminal_ataque(datos: SolicitudTerminal, usuario_actual: Usuario, bd: Sess
 @app.post("/defensa/terminal")
 @limiter.limit("60/minute")
 def terminal_defensiva(request: Request, datos: SolicitudTerminalDefensa, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """POST /defensa/terminal → igual que /terminal pero para la terminal de DEFENSA (SOC)."""
     materializar_fases_usuario(bd, usuario_actual.id)
     resp = _terminal_defensa(datos, usuario_actual, bd)
     info_sesion = evaluar_comando_en_sesion(bd, usuario_actual.id, datos.comando or "", resp.get("salida", ""))
@@ -955,6 +1035,7 @@ def terminal_defensiva(request: Request, datos: SolicitudTerminalDefensa, usuari
 
 
 def _terminal_defensa(datos: SolicitudTerminalDefensa, usuario_actual: Usuario, bd: Session) -> dict:
+    """Procesa un comando de defensa: handlers SOC locales y, si no calza, IA."""
     raw = (datos.comando or "").strip()
 
     def guardar(res: str):
@@ -1006,12 +1087,13 @@ def _terminal_defensa(datos: SolicitudTerminalDefensa, usuario_actual: Usuario, 
 
 @app.get("/perfil")
 def obtener_perfil(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """GET /perfil → datos del usuario en sesión + sus estadísticas de actividad."""
     # Las estadísticas salen del sistema REAL de entregas (no del legacy
     # IntentoEjercicio, que dejaba los números en 0 aunque el alumno entregara).
     entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.usuario_id == usuario_actual.id).all()
-    evaluadas = [e for e in entregas if e.nota is not None]
-    aprobadas = [e for e in evaluadas if e.nota >= 4]
-    nota_prom = round(sum(e.nota for e in evaluadas) / len(evaluadas), 1) if evaluadas else None
+    evaluadas = [e for e in entregas if e.nota is not None]     # entregas con nota
+    aprobadas = [e for e in evaluadas if e.nota >= 4]           # nota aprobatoria
+    nota_prom = round(sum(e.nota for e in evaluadas) / len(evaluadas), 1) if evaluadas else None  # promedio
     return {
         "id": usuario_actual.id,
         "nombre_usuario": usuario_actual.nombre_usuario,
@@ -1030,6 +1112,8 @@ def obtener_perfil(usuario_actual: Usuario = Depends(obtener_usuario_actual), bd
 
 @app.put("/perfil/actualizar")
 def actualizar_perfil(datos: SolicitudActualizarPerfil, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """PUT /perfil/actualizar → cambia nombre y nombre de usuario del propio perfil.
+    Si cambia el nombre de usuario, avisa al frontend (username_cambio) para re-login."""
     nombre = (datos.nombre or "").strip()
     nuevo_username = (datos.nombre_usuario or "").strip()
     if not nombre:
@@ -1038,6 +1122,7 @@ def actualizar_perfil(datos: SolicitudActualizarPerfil, usuario_actual: Usuario 
         raise HTTPException(status_code=400, detail="El nombre de usuario debe tener al menos 3 caracteres")
     username_cambio = nuevo_username != usuario_actual.nombre_usuario
     if username_cambio:
+        # El nuevo nombre de usuario no puede chocar con el de otra cuenta.
         existente = bd.query(Usuario).filter(Usuario.nombre_usuario == nuevo_username, Usuario.id != usuario_actual.id).first()
         if existente:
             raise HTTPException(status_code=400, detail="Ese nombre de usuario ya está en uso")
@@ -1049,10 +1134,11 @@ def actualizar_perfil(datos: SolicitudActualizarPerfil, usuario_actual: Usuario 
 
 @app.put("/perfil/cambiar-contrasena")
 def cambiar_contrasena_perfil(datos: SolicitudCambiarContrasenaPerfil, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """PUT /perfil/cambiar-contrasena → cambia la contraseña verificando la actual."""
     from .auth import verificar_contrasena, hashear_contrasena
     if not verificar_contrasena(datos.contrasena_actual, usuario_actual.contrasena):
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
-    usuario_actual.contrasena = hashear_contrasena(datos.nueva_contrasena)
+    usuario_actual.contrasena = hashear_contrasena(datos.nueva_contrasena)   # se guarda hasheada
     bd.commit()
     return {"mensaje": "Contraseña actualizada correctamente"}
 
@@ -1067,6 +1153,7 @@ TIPOS_CONTENIDO = {"ataque", "defensa"}
 
 
 def _validar_ref_contenido(tipo: str, nivel: int, seccion: str):
+    """Valida que (tipo, nivel, sección) sean valores permitidos; si no, lanza 400."""
     if tipo not in TIPOS_CONTENIDO:
         raise HTTPException(status_code=400, detail="Tipo inválido (ataque|defensa)")
     if not (1 <= nivel <= 7):
@@ -1102,6 +1189,7 @@ def obtener_contenido_informativo(tipo: str, nivel: int, seccion: str, usuario_a
 
 @app.put("/contenido-informativo/{tipo}/{nivel}/{seccion}")
 def guardar_contenido_informativo(tipo: str, nivel: int, seccion: str, datos: SolicitudGuardarContenido, usuario_actual: Usuario = Depends(obtener_usuario_actual), bd: Session = Depends(obtener_bd)):
+    """PUT /contenido-informativo/... → guarda/edita el texto teórico de una sección (docente/admin)."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
     _validar_ref_contenido(tipo, nivel, seccion)
@@ -1110,9 +1198,11 @@ def guardar_contenido_informativo(tipo: str, nivel: int, seccion: str, datos: So
         ContenidoInformativo.seccion == seccion,
     ).first()
     if row:
+        # Ya existía override: se actualiza.
         row.contenido = datos.contenido
         row.actualizado_por_id = usuario_actual.id
     else:
+        # No existía: se crea el override en BD.
         bd.add(ContenidoInformativo(
             tipo=tipo, nivel=nivel, seccion=seccion,
             contenido=datos.contenido, actualizado_por_id=usuario_actual.id,
@@ -1141,14 +1231,16 @@ def revertir_contenido_informativo(tipo: str, nivel: int, seccion: str, usuario_
 @app.post("/auth/recuperar-contrasena")
 @limiter.limit("5/minute")
 def recuperar_contrasena(request: Request, datos: SolicitudRecuperarContrasena, bd: Session = Depends(obtener_bd)):
+    """POST /auth/recuperar-contrasena → genera un token y envía el correo de recuperación.
+    Responde siempre lo mismo (exista o no el correo) para no filtrar qué cuentas existen."""
     import secrets
     from datetime import datetime, timezone, timedelta
     # Siempre responder igual para no revelar si el correo existe
     usuario = bd.query(Usuario).filter(Usuario.correo == datos.correo.strip().lower()).first()
     if usuario:
-        token = secrets.token_urlsafe(32)
+        token = secrets.token_urlsafe(32)   # token aleatorio seguro (URL-safe)
         usuario.token_reset = token
-        usuario.token_reset_expira = datetime.now(timezone.utc) + timedelta(hours=1)
+        usuario.token_reset_expira = datetime.now(timezone.utc) + timedelta(hours=1)   # válido 1 hora
         bd.commit()
         correo_recuperar_contrasena(
             destinatario=usuario.correo,
@@ -1161,15 +1253,19 @@ def recuperar_contrasena(request: Request, datos: SolicitudRecuperarContrasena, 
 @app.post("/auth/reset-contrasena")
 @limiter.limit("10/minute")
 def reset_contrasena(request: Request, datos: SolicitudResetContrasena, bd: Session = Depends(obtener_bd)):
+    """POST /auth/reset-contrasena → fija la nueva contraseña validando el token del correo."""
     from datetime import datetime, timezone
     if not datos.nueva_contrasena or len(datos.nueva_contrasena) < 8:
         raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 8 caracteres")
+    # Busca al usuario por el token recibido.
     usuario = bd.query(Usuario).filter(Usuario.token_reset == datos.token).first()
     if not usuario:
         raise HTTPException(status_code=400, detail="Token inválido o expirado")
+    # Verifica que el token no haya caducado (1 hora desde que se generó).
     if usuario.token_reset_expira and usuario.token_reset_expira.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="El enlace expiró. Solicita uno nuevo.")
     usuario.contrasena = hashear_contrasena(datos.nueva_contrasena)
+    # Se invalida el token tras usarlo (un solo uso).
     usuario.token_reset = None
     usuario.token_reset_expira = None
     bd.commit()
@@ -1181,6 +1277,7 @@ def reset_contrasena(request: Request, datos: SolicitudResetContrasena, bd: Sess
 @app.post("/ia/feedback")
 @limiter.limit("10/minute")
 def ia_feedback(request: Request, body: SolicitudFeedbackIA, usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    """POST /ia/feedback → pide a la IA una explicación didáctica de un comando ejecutado."""
     prompt = (
         f"Eres un docente universitario de ciberseguridad. Explica el comando del estudiante de forma didáctica y breve.\n"
         f"Nivel: {body.nivel}\nComando: {body.comando}\nResultado: {body.resultado}\nEvidencia: {body.evidencia}"
@@ -1200,6 +1297,9 @@ def crear_ejercicio_docente(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """POST /ejercicios-docente/crear → crea un ejercicio (docente/admin).
+    Valida que cada punto sea verificable, genera el escenario narrativo con IA
+    y evita duplicados por reintentos del navegador."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Solo docentes y admin pueden crear ejercicios")
 
@@ -1295,6 +1395,7 @@ def crear_ejercicio_docente(
     except Exception:
         contexto_ia = f"Escenario: {titulo}\n\n{datos.descripcion}"
 
+    # Crea el ejercicio en la BD con el escenario generado.
     ejercicio = EjercicioDocente(
         titulo=titulo,
         descripcion=datos.descripcion,
@@ -1308,7 +1409,8 @@ def crear_ejercicio_docente(
         creado_por_id=usuario_actual.id,
     )
     bd.add(ejercicio)
-    bd.flush()
+    bd.flush()   # flush() asigna el id del ejercicio sin cerrar la transacción
+    # Crea los items (puntos del checklist) asociados al ejercicio.
     for item in datos.items:
         bd.add(ItemEjercicioDocente(
             ejercicio_id=ejercicio.id,
@@ -1326,6 +1428,7 @@ def listar_ejercicios_docente(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """GET /ejercicios-docente → lista de ejercicios. Docente/admin ven todos; estudiante solo los visibles."""
     # Docente y admin ven todos (visibles + ocultos). Estudiante solo los visibles.
     es_panel = usuario_actual.rol in ("docente", "admin")
     query = bd.query(EjercicioDocente)
@@ -1360,6 +1463,8 @@ def ejercicios_por_tipo(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """GET /ejercicios-docente/tipo/{tipo} → ejercicios visibles de un tipo (ataque/defensa),
+    marcando si su plazo ya venció. Lo usan los dashboards de los estudiantes."""
     ejercicios = bd.query(EjercicioDocente).filter(
         EjercicioDocente.activo == True,
         EjercicioDocente.tipo == tipo,
@@ -1409,6 +1514,9 @@ def ia_asistir_ejercicio(
     datos: SolicitudIaAsistir,
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
 ):
+    """POST /ejercicios-docente/ia-asistir → la IA genera descripción, instrucciones y
+    objetivos para un ejercicio (según tipo/nivel), garantizando que cada objetivo
+    sea verificable por el laboratorio (con una red de seguridad de fallback)."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
     tipo_label = "Ataque (pentesting ofensivo)" if datos.tipo == "ataque" else "Defensa (SOC / Blue Team)"
@@ -1506,13 +1614,14 @@ def ia_asistir_ejercicio(
             ],
         }
         items_ia = [str(x) for x in (data.get("items") or [])]
+        # Lista de objetivos de respaldo (verificables) que no haya generado ya la IA.
         fallbacks = [f for f in FALLBACK_ITEMS.get(datos.tipo, FALLBACK_ITEMS["defensa"]) if f not in items_ia]
         items_final = []
         for it in items_ia:
             if item_verificable(it):
-                items_final.append(it)
+                items_final.append(it)            # objetivo válido: se conserva
             elif fallbacks:
-                items_final.append(fallbacks.pop(0))
+                items_final.append(fallbacks.pop(0))  # no verificable: se sustituye por uno de respaldo
         return {
             "descripcion": data.get("descripcion", ""),
             "instrucciones": data.get("instrucciones", ""),
@@ -1528,6 +1637,7 @@ def detalle_ejercicio_docente(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """GET /ejercicios-docente/{id} → datos completos de un ejercicio y su checklist."""
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
     if not ej:
         raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
@@ -1550,12 +1660,13 @@ def toggle_visibilidad_ejercicio(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """PATCH /ejercicios-docente/{id}/visibilidad → alterna publicado/oculto (docente/admin)."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
     if not ej:
         raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
-    ej.activo = not ej.activo
+    ej.activo = not ej.activo   # invierte el estado de visibilidad
     bd.commit()
     return {"activo": ej.activo, "mensaje": "Visible" if ej.activo else "Oculto"}
 
@@ -1566,6 +1677,7 @@ def eliminar_ejercicio_docente(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """DELETE /ejercicios-docente/{id} → elimina un ejercicio y sus datos asociados (docente/admin)."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
@@ -1590,6 +1702,8 @@ def iniciar_sesion_ejercicio(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """POST /ejercicios-docente/{id}/iniciar → arranca la sesión de un ejercicio para el alumno.
+    Verifica que esté visible, dentro de plazo, con objetivos y no entregado ya."""
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id, EjercicioDocente.activo == True).first()
     if not ej:
         raise HTTPException(status_code=404, detail="Ejercicio no encontrado o no visible")
@@ -1597,13 +1711,14 @@ def iniciar_sesion_ejercicio(
         raise HTTPException(status_code=400, detail="El plazo de este ejercicio ha vencido")
     if not ej.items:
         raise HTTPException(status_code=400, detail="El ejercicio no tiene objetivos definidos")
+    # No se puede iniciar si ya hay una entrega (salvo que el docente habilitara reintento).
     entrega = bd.query(EntregaEjercicioDocente).filter(
         EntregaEjercicioDocente.ejercicio_id == ejercicio_id,
         EntregaEjercicioDocente.usuario_id == usuario_actual.id,
     ).first()
     if entrega and not entrega.reintento_habilitado:
         raise HTTPException(status_code=409, detail="Ya entregaste este ejercicio")
-    sesion = crear_sesion(bd, usuario_actual.id, ej)
+    sesion = crear_sesion(bd, usuario_actual.id, ej)   # crea la sesión (escenario + timer)
     registrar_accion(bd, f"iniciar-ejercicio {ejercicio_id}", "OK", usuario_id=usuario_actual.id)
     return {"mensaje": "Sesión iniciada", "sesion": sesion_a_dict(bd, sesion)}
 
@@ -1613,10 +1728,12 @@ def consultar_sesion_activa(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """GET /ejercicios-docente/sesion/activa → estado de la sesión en curso (para recargar/sincronizar).
+    Comprueba expiración y hace avanzar las fases del ataque."""
     sesion = obtener_sesion_activa(bd, usuario_actual.id)
     if not sesion:
         return {"sesion": None}
-    if not verificar_expiracion(bd, sesion):
+    if not verificar_expiracion(bd, sesion):   # si no expiró, avanza las fases
         materializar_fases(bd, sesion)
     data = sesion_a_dict(bd, sesion)
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == sesion.ejercicio_id).first()
@@ -1637,6 +1754,8 @@ def pedir_pista_sesion(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """POST /ejercicios-docente/sesion/pista → genera una pista para el primer paso pendiente.
+    Suma una ayuda (penaliza el %) y registra la pista para que el docente la vea."""
     sesion = obtener_sesion_activa(bd, usuario_actual.id)
     if not sesion:
         raise HTTPException(status_code=404, detail="No hay sesión de ejercicio activa")
@@ -1644,11 +1763,12 @@ def pedir_pista_sesion(
         raise HTTPException(status_code=400, detail="La sesión ya expiró")
 
     data = sesion_a_dict(bd, sesion)
+    # Busca el primer item del checklist aún no completado.
     pendiente = next((it for it in data["items"] if not it["completado"]), None)
     if not pendiente:
         return {"pista": "Ya completaste todos los pasos del ejercicio.", "ayudas": sesion.ayudas}
 
-    sesion.ayudas += 1
+    sesion.ayudas += 1   # cada pista cuenta como una ayuda (penaliza el resultado)
     bd.commit()
     herramientas = comandos_sugeridos_para_item(pendiente["descripcion"])
     contexto_herr = (
@@ -1715,9 +1835,11 @@ def listar_entregas_ejercicio(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """GET /ejercicios-docente/{id}/entregas → entregas de un ejercicio (docente/admin).
+    Si el plazo venció, añade como "No entregado" a los estudiantes que no rindieron."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
-    finalizar_sesiones_vencidas(bd)
+    finalizar_sesiones_vencidas(bd)   # cierra sesiones de alumnos que abandonaron
     ej = bd.query(EjercicioDocente).filter(EjercicioDocente.id == ejercicio_id).first()
     entregas = bd.query(EntregaEjercicioDocente).filter(EntregaEjercicioDocente.ejercicio_id == ejercicio_id).all()
     resultado = []
@@ -1875,6 +1997,8 @@ def listar_entregas_estudiante(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """GET /docente/estudiante/{usuario}/entregas → todas las entregas de un estudiante (docente/admin).
+    Lo usan el panel y las estadísticas para ver el detalle por alumno."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
     u = bd.query(Usuario).filter(Usuario.nombre_usuario == nombre_usuario).first()
@@ -1915,6 +2039,8 @@ def mis_entregas(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """GET /ejercicios-docente/mis-entregas/todas → todas las entregas del propio estudiante,
+    con su nota y feedback. Alimenta la página /notas."""
     entregas = bd.query(EntregaEjercicioDocente).filter(
         EntregaEjercicioDocente.usuario_id == usuario_actual.id
     ).order_by(EntregaEjercicioDocente.fecha_entrega.desc()).all()
@@ -1949,6 +2075,7 @@ def evaluar_entrega_ejercicio(
     usuario_actual: Usuario = Depends(obtener_usuario_actual),
     bd: Session = Depends(obtener_bd),
 ):
+    """POST /ejercicios-docente/entregas/{id}/evaluar → asigna nota y comentarios a una entrega (docente/admin)."""
     if usuario_actual.rol not in ("docente", "admin"):
         raise HTTPException(status_code=403, detail="Sin permiso")
     if datos.nota < 1.0 or datos.nota > 7.0:
@@ -1957,6 +2084,7 @@ def evaluar_entrega_ejercicio(
     if not entrega:
         raise HTTPException(status_code=404, detail="Entrega no encontrada")
     from datetime import datetime, timezone
+    # Registra la calificación y marca la entrega como evaluada.
     entrega.nota = datos.nota
     entrega.comentarios_docente = datos.comentarios
     entrega.estado = "evaluado"

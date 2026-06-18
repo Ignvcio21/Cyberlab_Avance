@@ -6,33 +6,40 @@ Variables de entorno requeridas:
   APP_URL           URL pública del frontend
 """
 import os
-import urllib.request
+import urllib.request          # cliente HTTP de la stdlib (sin dependencias extra)
 import urllib.error
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor   # para enviar en segundo plano
 
 logging.basicConfig(level=logging.INFO)
-_log = logging.getLogger("email_utils")
+_log = logging.getLogger("email_utils")          # logger propio del módulo
+# Pool de hasta 3 hilos: los envíos se hacen aquí para NO bloquear la petición HTTP.
 _executor = ThreadPoolExecutor(max_workers=3)
 
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
-EMAIL_FROM = "vidal.diaz.ignacio@gmail.com"
-EMAIL_FROM_NAME = "CyberLab"
-APP_URL = os.getenv("APP_URL", "https://cyberlabavance.vercel.app")
+# --- Configuración (toda desde variables de entorno, con valores por defecto) ---
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")          # clave de la API de SendGrid
+EMAIL_FROM = "vidal.diaz.ignacio@gmail.com"                   # remitente verificado
+EMAIL_FROM_NAME = "CyberLab"                                  # nombre visible del remitente
+APP_URL = os.getenv("APP_URL", "https://cyberlabavance.vercel.app")  # URL del frontend (para los enlaces)
 
 
 def _enviar_sync(to: str, subject: str, html: str):
+    """Envío REAL y bloqueante del correo vía la API HTTP de SendGrid.
+    Se ejecuta dentro de un hilo del pool (no en el hilo de la petición)."""
     _log.info("EMAIL: intentando enviar a %s | subject: %s", to, subject)
     if not SENDGRID_API_KEY:
+        # Sin API key configurada no se puede enviar; se registra y se aborta.
         _log.error("EMAIL: SENDGRID_API_KEY no configurada")
         return
+    # Cuerpo JSON con el formato que exige la API de SendGrid v3.
     payload = json.dumps({
-        "personalizations": [{"to": [{"email": to}]}],
-        "from": {"email": EMAIL_FROM, "name": EMAIL_FROM_NAME},
-        "subject": subject,
-        "content": [{"type": "text/html", "value": html}],
+        "personalizations": [{"to": [{"email": to}]}],          # destinatario
+        "from": {"email": EMAIL_FROM, "name": EMAIL_FROM_NAME}, # remitente
+        "subject": subject,                                     # asunto
+        "content": [{"type": "text/html", "value": html}],      # cuerpo en HTML
     }).encode("utf-8")
+    # Petición POST autenticada con el API key (Bearer).
     req = urllib.request.Request(
         "https://api.sendgrid.com/v3/mail/send",
         data=payload,
@@ -43,26 +50,36 @@ def _enviar_sync(to: str, subject: str, html: str):
         method="POST",
     )
     try:
+        # timeout=10: si SendGrid no responde en 10s, falla en vez de colgarse.
         with urllib.request.urlopen(req, timeout=10) as resp:
             _log.info("EMAIL: enviado OK status=%s", resp.status)
             return resp.status
     except urllib.error.HTTPError as e:
+        # SendGrid devolvió un error HTTP (ej: API key inválida); se loguea el detalle.
         body = e.read().decode("utf-8", errors="ignore")
         _log.error("EMAIL: HTTPError %s — %s", e.code, body)
     except Exception as e:
+        # Cualquier otro fallo (red, timeout…): se registra sin romper la app.
         _log.error("EMAIL: error inesperado — %s", e)
 
 
 def enviar_correo(to: str, subject: str, html: str):
     """Encola el envío en un hilo para no bloquear la respuesta HTTP."""
+    # Solo intenta si el destinatario parece un correo válido.
     if to and "@" in to:
         _log.info("EMAIL: encolando correo para %s", to)
+        # submit() lanza _enviar_sync en un hilo del pool y devuelve de inmediato.
         _executor.submit(_enviar_sync, to, subject, html)
 
 
 # ── Plantillas HTML ──────────────────────────────────────────────────
+# Funciones auxiliares que arman el HTML de los correos por composición:
+# _base envuelve el contenido en la maqueta general (header/footer) y los
+# helpers (_h1, _p, _boton, _caja) generan piezas reutilizables con estilos inline
+# (los clientes de correo no soportan hojas de estilo externas).
 
 def _base(contenido: str, titulo: str) -> str:
+    """Maqueta base del correo: cabecera con logo, el `contenido` y el pie."""
     return f"""
 <!DOCTYPE html>
 <html lang="es">
@@ -111,14 +128,17 @@ def _base(contenido: str, titulo: str) -> str:
 
 
 def _h1(texto: str) -> str:
+    """Título principal del correo."""
     return f'<h1 style="margin:0 0 16px;font-size:22px;font-weight:800;color:#f0f6fc;letter-spacing:-0.3px;">{texto}</h1>'
 
 
 def _p(texto: str) -> str:
+    """Párrafo de texto con el estilo estándar."""
     return f'<p style="margin:0 0 14px;font-size:15px;color:#8b949e;line-height:1.65;">{texto}</p>'
 
 
 def _boton(texto: str, url: str, color: str = "#0ea5e9") -> str:
+    """Botón de llamada a la acción (enlace estilizado como botón)."""
     return f"""
 <table cellpadding="0" cellspacing="0" style="margin:24px 0;">
   <tr>
@@ -132,6 +152,7 @@ def _boton(texto: str, url: str, color: str = "#0ea5e9") -> str:
 
 
 def _caja(contenido: str, color_borde: str = "#30363d", color_fondo: str = "#21262d") -> str:
+    """Caja resaltada (recuadro con borde y fondo) para destacar información."""
     return f"""
 <div style="background:{color_fondo};border:1px solid {color_borde};border-radius:10px;
             padding:16px 20px;margin:16px 0;">
@@ -150,7 +171,10 @@ def correo_nuevo_ejercicio(
     nivel: int,
     tiempo_minutos: int,
 ) -> None:
+    """Notifica a un estudiante que se publicó un nuevo ejercicio."""
+    # Etiqueta según el tipo de ejercicio.
     tipo_label = "🗡 Ataque" if tipo == "ataque" else "🛡 Defensa SOC"
+    # Se compone el cuerpo HTML uniendo las piezas con "+".
     contenido = (
         _h1("📋 Nuevo ejercicio disponible")
         + _p(f"Hola <strong style='color:#f0f6fc;'>{nombre_estudiante}</strong>,")
@@ -181,8 +205,10 @@ def correo_nota_asignada(
     nota: float,
     comentarios: str | None,
 ) -> None:
+    """Avisa al estudiante de que su entrega fue evaluada, con la nota obtenida."""
+    # Color de la nota: verde (≥5.5), ámbar (≥4.0) o rojo (reprobado).
     color = "#22c55e" if nota >= 5.5 else "#f59e0b" if nota >= 4.0 else "#ef4444"
-    estado = "aprobado ✅" if nota >= 4.0 else "insuficiente ❌"
+    estado = "aprobado ✅" if nota >= 4.0 else "insuficiente ❌"   # ≥4.0 aprueba
     contenido = (
         _h1("🎓 Tu entrega fue evaluada")
         + _p(f"Hola <strong style='color:#f0f6fc;'>{nombre_estudiante}</strong>,")
@@ -219,6 +245,8 @@ def correo_recuperar_contrasena(
     nombre: str,
     token: str,
 ) -> None:
+    """Envía el enlace de recuperación de contraseña (con el token en la URL)."""
+    # El frontend (/reset-contrasena) lee el token de la query para el segundo paso.
     url_reset = f"{APP_URL}/reset-contrasena?token={token}"
     contenido = (
         _h1("🔐 Recuperar contraseña")

@@ -1,18 +1,35 @@
 "use client"
 
+// =============================================================================
+// PÁGINA: /estadisticas — Exportar (reportes e informes del curso)
+// -----------------------------------------------------------------------------
+// Panel del docente/admin para analizar el desempeño y exportar datos. Tiene
+// dos pestañas principales:
+//   • "Informes": reporte PDF general del curso + análisis detallado en dos
+//     vistas (Por ejercicio / Por estudiante) con métricas y entregas.
+//   • "Notas": descargas rápidas en CSV y PDF (notas por entrega, lista de
+//     estudiantes, resumen de aprobación, notas por ejercicio e individuales).
+// Toda la generación de PDF se delega a `abrirReporteImprimible`; el CSV se
+// arma localmente. Protegida por <GuardSesion>.
+// =============================================================================
+
 import { useEffect, useState, useMemo, useCallback, useRef } from "react"
 import GuardSesion from "../componentes/GuardSesion"
 import BarraSuperior from "../componentes/BarraSuperior"
+// Componentes/utilidades compartidas para mostrar y dar formato a las entregas.
 import ModalEntrega, { BadgeCierre, BarraResultado, fmtDur, colorResultado } from "../componentes/ModalEntrega"
-import { abrirReporteImprimible } from "../componentes/reporteExport"
+import { abrirReporteImprimible } from "../componentes/reporteExport" // genera la ventana de PDF imprimible
 
+// URL base del backend (variable de entorno o servidor de producción).
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://cyberlabavance-production.up.railway.app"
 
+// Cabeceras HTTP con el token de sesión para las peticiones autenticadas.
 const getAuthHeaders = () => ({
   "Authorization": `Bearer ${sessionStorage.getItem("token") || ""}`,
   "Content-Type": "application/json",
 })
 
+// Formatea una fecha ISO a fecha+hora legible (es-CL); devuelve "—" si no hay valor.
 const formatFecha = (str) => {
   if (!str) return "—"
   try {
@@ -22,39 +39,50 @@ const formatFecha = (str) => {
   } catch { return str }
 }
 
+// Genera y descarga un archivo CSV a partir de un arreglo de objetos (filas).
 function descargarCSV(filas, nombre) {
-  if (!filas.length) return
-  const cabeceras = Object.keys(filas[0])
+  if (!filas.length) return                       // sin datos, no hace nada
+  const cabeceras = Object.keys(filas[0])         // los nombres de columna salen de las claves del 1er objeto
   const csv = [
-    cabeceras.join(","),
+    cabeceras.join(","),                          // fila de encabezados
+    // Cada fila: se escapan las comillas dobles ("" según el estándar CSV) y se envuelve cada celda en comillas.
     ...filas.map(f => cabeceras.map(k => `"${(f[k] ?? "").toString().replace(/"/g, '""')}"`).join(",")),
   ].join("\n")
+  // El "﻿" (BOM) inicial hace que Excel reconozca el UTF-8 y muestre bien los acentos.
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a"); a.href = url; a.download = nombre; a.click()
-  URL.revokeObjectURL(url)
+  const url = URL.createObjectURL(blob)           // URL temporal en memoria para el blob
+  const a = document.createElement("a"); a.href = url; a.download = nombre; a.click() // descarga simulando un clic
+  URL.revokeObjectURL(url)                         // libera la URL temporal
 }
 
+// Traduce el código de "cierre" de una sesión a un texto legible para el reporte.
 const cierreTexto = (c) => c === "completada" ? "Completada" : c === "intrusion" ? "Intrusión sufrida" : c === "expirada" ? "Expirada (parcial)" : "—"
 
 // ═══════════════════════════════════════════════════════════════════
 // Selector de ejercicio enriquecido (Opción A) — agrupado por nivel
 // ═══════════════════════════════════════════════════════════════════
+// Dropdown personalizado para elegir un ejercicio. Permite buscar por título,
+// agrupa los resultados por nivel y muestra chips informativos (tipo del
+// ejercicio, nº de entregas sin evaluar o marca de BORRADOR).
 function SelectorEjercicioA({ ejercicios, statsPorEj, value, onChange }) {
-  const [abierto, setAbierto] = useState(false)
-  const [busqueda, setBusqueda] = useState("")
-  const ref = useRef(null)
+  const [abierto, setAbierto] = useState(false)   // ¿está desplegado el menú?
+  const [busqueda, setBusqueda] = useState("")    // texto del buscador interno
+  const ref = useRef(null)                         // referencia al contenedor (para detectar clics fuera)
 
+  // Cierra el dropdown al hacer clic fuera de él.
   useEffect(() => {
     const cerrar = (e) => { if (ref.current && !ref.current.contains(e.target)) setAbierto(false) }
     document.addEventListener("mousedown", cerrar)
     return () => document.removeEventListener("mousedown", cerrar)
   }, [])
 
-  const sel = ejercicios.find(e => String(e.id) === String(value))
+  const sel = ejercicios.find(e => String(e.id) === String(value)) // ejercicio actualmente seleccionado
+  // Filtra por el texto buscado y obtiene la lista ordenada de niveles presentes.
   const filtrados = ejercicios.filter(e => e.titulo?.toLowerCase().includes(busqueda.trim().toLowerCase()))
   const niveles = [...new Set(filtrados.map(e => e.nivel || 1))].sort((a, b) => a - b)
-  const icono = (t) => t === "defensa" ? "🛡" : "⚔"
+  const icono = (t) => t === "defensa" ? "🛡" : "⚔" // icono según tipo de ejercicio
+
+  // Chip con el tipo (ataque/defensa), coloreado según corresponda.
 
   const ChipTipo = ({ t }) => (
     <span style={{
@@ -64,6 +92,7 @@ function SelectorEjercicioA({ ejercicios, statsPorEj, value, onChange }) {
         : { background: "rgba(255,69,58,0.10)", color: "#ff7a6e", border: "1px solid rgba(255,69,58,0.25)" }),
     }}>{t}</span>
   )
+  // Chip con la cantidad de entregas sin evaluar (solo se muestra si n > 0).
   const ChipPend = ({ n }) => n > 0 ? (
     <span style={{ fontFamily: "monospace", fontSize: 9.5, fontWeight: 800, background: "rgba(255,200,0,0.12)", color: "#ffc107", border: "1px solid rgba(255,200,0,0.28)", borderRadius: 5, padding: "2px 7px", whiteSpace: "nowrap" }}>
       {n} sin evaluar
@@ -72,6 +101,7 @@ function SelectorEjercicioA({ ejercicios, statsPorEj, value, onChange }) {
 
   return (
     <div ref={ref} style={{ position: "relative", maxWidth: 540 }}>
+      {/* Botón que muestra el ejercicio elegido (o placeholder) y abre/cierra el menú. */}
       <button onClick={() => setAbierto(v => !v)} style={{
         width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "11px 14px", cursor: "pointer",
         background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 10,
@@ -87,6 +117,7 @@ function SelectorEjercicioA({ ejercicios, statsPorEj, value, onChange }) {
         <span style={{ marginLeft: "auto", color: "#6e7681", fontSize: 11 }}>▼</span>
       </button>
 
+      {/* Menú desplegable: buscador + lista de ejercicios agrupados por nivel. */}
       {abierto && (
         <div style={{
           position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 50,
@@ -139,6 +170,9 @@ function SelectorEjercicioA({ ejercicios, statsPorEj, value, onChange }) {
 // ═══════════════════════════════════════════════════════════════════
 // Fila de entrega reutilizable (lista por ejercicio y por estudiante)
 // ═══════════════════════════════════════════════════════════════════
+// Renderiza una entrega como fila: etiqueta (estudiante o ejercicio), badge de
+// cierre, barra de resultado, tiempo/pistas/fases, nota o "Pendiente" y botones
+// para ver el detalle (onVer) o exportar su PDF (onPDF).
 function FilaEntrega({ etiqueta, sub, en, onVer, onPDF }) {
   return (
     <div onClick={onVer} style={{
@@ -193,15 +227,18 @@ function FilaEntrega({ etiqueta, sub, en, onVer, onPDF }) {
 }
 
 // Reporte PDF individual de UNA entrega (detalle completo de un alumno en un ejercicio)
+// Pide al backend el detalle de la entrega y arma sus secciones (checklist,
+// línea de tiempo, pistas) para generar un PDF imprimible.
 async function exportarEntregaPDF(entregaId) {
   try {
     const r = await fetch(`${API_URL}/ejercicios-docente/entregas/${entregaId}/detalle`, { headers: getAuthHeaders() })
     const d = await r.json()
     if (!r.ok) return
-    const res = d.resumen || {}
-    const det = d.detalle
-    const secciones = []
+    const res = d.resumen || {}   // resumen (porcentaje, tiempo, ayudas, cierre)
+    const det = d.detalle         // detalle (items del checklist, timeline, pistas)
+    const secciones = []          // secciones que tendrá el PDF
     if (det) {
+      // Sección 1: checklist con el estado de cada ítem.
       secciones.push({
         titulo: `Checklist del ejercicio (${(det.items || []).filter(i => i.completado).length}/${(det.items || []).length})`,
         columnas: [
@@ -215,11 +252,13 @@ async function exportarEntregaPDF(entregaId) {
           "Comando": it.comando || "—", "Min": it.seg != null ? fmtDur(it.seg) : "—",
         })),
       })
+      // Sección 2: línea de tiempo de comandos ejecutados (✗ marca los fallidos).
       secciones.push({
         titulo: "Línea de tiempo",
         columnas: [{ key: "Min", label: "Min", align: "center" }, { key: "Evento", label: "Evento", formato: "mono" }],
         filas: (det.timeline || []).map(t => ({ "Min": fmtDur(t.seg), "Evento": (t.ok ? "" : "✗ ") + t.cmd })),
       })
+      // Sección 3 (opcional): pistas solicitadas, solo si hubo alguna.
       if ((det.pistas || []).length) secciones.push({
         titulo: "Pistas solicitadas",
         columnas: [{ key: "P", label: "#", align: "center" }, { key: "Pista", label: "Pista" }, { key: "Min", label: "Min", align: "center" }],
@@ -246,14 +285,18 @@ async function exportarEntregaPDF(entregaId) {
 // ═══════════════════════════════════════════════════════════════════
 // VISTA — POR EJERCICIO
 // ═══════════════════════════════════════════════════════════════════
+// Para un ejercicio elegido: carga sus entregas, calcula métricas (pendientes,
+// resultado medio, tiempo mediano, ítem más fallado), permite filtrar/ordenar
+// y exportar a CSV/PDF. Cada entrega abre un <ModalEntrega> de detalle.
 function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
-  const [ejId, setEjId] = useState(ejercicios[0] ? String(ejercicios[0].id) : "")
-  const [entregas, setEntregas] = useState([])
-  const [cargando, setCargando] = useState(false)
-  const [filtro, setFiltro] = useState("todas")
-  const [orden, setOrden] = useState("resultado")
-  const [modalId, setModalId] = useState(null)
+  const [ejId, setEjId] = useState(ejercicios[0] ? String(ejercicios[0].id) : "") // ejercicio seleccionado
+  const [entregas, setEntregas] = useState([])     // entregas del ejercicio actual
+  const [cargando, setCargando] = useState(false)  // cargando entregas
+  const [filtro, setFiltro] = useState("todas")    // todas | pendientes | evaluadas
+  const [orden, setOrden] = useState("resultado")  // criterio de ordenamiento
+  const [modalId, setModalId] = useState(null)     // id de la entrega abierta en el modal
 
+  // Descarga las entregas del ejercicio indicado desde el backend.
   const cargarEntregas = useCallback((id) => {
     if (!id) { setEntregas([]); return }
     setCargando(true)
@@ -264,17 +307,20 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
       .finally(() => setCargando(false))
   }, [])
 
+  // Recarga las entregas cada vez que cambia el ejercicio seleccionado.
   useEffect(() => { cargarEntregas(ejId) }, [ejId, cargarEntregas])
 
-  const ejercicio = ejercicios.find(e => String(e.id) === ejId)
+  const ejercicio = ejercicios.find(e => String(e.id) === ejId) // objeto del ejercicio actual
 
+  // Métricas agregadas del ejercicio (se recalculan cuando cambian las entregas).
   const stats = useMemo(() => {
-    const pendientes = entregas.filter(e => e.estado !== "evaluado").length
-    const finales = entregas.map(e => e.resumen?.porcentaje_final).filter(v => v != null)
-    const media = finales.length ? Math.round(finales.reduce((s, v) => s + v, 0) / finales.length) : null
-    const rango = finales.length ? [Math.min(...finales), Math.max(...finales)] : null
-    const tiempos = entregas.map(e => e.resumen?.tiempo_seg).filter(v => v != null).sort((a, b) => a - b)
-    const mediana = tiempos.length ? tiempos[Math.floor(tiempos.length / 2)] : null
+    const pendientes = entregas.filter(e => e.estado !== "evaluado").length          // entregas sin evaluar
+    const finales = entregas.map(e => e.resumen?.porcentaje_final).filter(v => v != null) // % finales válidos
+    const media = finales.length ? Math.round(finales.reduce((s, v) => s + v, 0) / finales.length) : null // promedio de %
+    const rango = finales.length ? [Math.min(...finales), Math.max(...finales)] : null // [mínimo, máximo]
+    const tiempos = entregas.map(e => e.resumen?.tiempo_seg).filter(v => v != null).sort((a, b) => a - b) // tiempos ordenados
+    const mediana = tiempos.length ? tiempos[Math.floor(tiempos.length / 2)] : null   // tiempo mediano
+    // Cuenta, por cada ítem del checklist, cuántas entregas NO lo completaron.
     const fallos = {}; let conChecklist = 0
     entregas.forEach(e => {
       const items = e.resumen?.items
@@ -282,14 +328,16 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
       conChecklist++
       items.forEach(it => { if (!it.completado) fallos[it.descripcion] = (fallos[it.descripcion] || 0) + 1 })
     })
-    const peor = Object.entries(fallos).sort((a, b) => b[1] - a[1])[0] || null
+    const peor = Object.entries(fallos).sort((a, b) => b[1] - a[1])[0] || null // ítem con más fallos
     return { pendientes, media, rango, mediana, peor, conChecklist }
   }, [entregas])
 
+  // Aplica el filtro y el orden seleccionados a la lista de entregas.
   const visibles = useMemo(() => {
     let lista = entregas
     if (filtro === "pendientes") lista = lista.filter(e => e.estado !== "evaluado")
     if (filtro === "evaluadas") lista = lista.filter(e => e.estado === "evaluado")
+    // Función que extrae el valor a comparar según el criterio de orden elegido.
     const val = {
       resultado: e => e.resumen?.porcentaje_final ?? -1,
       fecha: e => e.fecha_entrega || "",
@@ -303,6 +351,7 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
     })
   }, [entregas, filtro, orden])
 
+  // Construye las filas (objetos) que se usan tanto para el CSV como para el PDF.
   const filasExport = () => visibles.map(e => ({
     "Estudiante": e.usuario,
     "Cierre": cierreTexto(e.resumen?.cierre),
@@ -314,9 +363,11 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
     "Fecha": formatFecha(e.fecha_entrega),
   }))
 
+  // Exporta las entregas visibles a un CSV con nombre derivado del título del ejercicio.
   const exportarCSV = () => descargarCSV(filasExport(),
     `entregas-${(ejercicio?.titulo || "ejercicio").toLowerCase().replace(/\s+/g, "-").slice(0, 40)}.csv`)
 
+  // Exporta un reporte PDF con las entregas recibidas y la lista de quienes no entregaron.
   const exportarReporte = () => {
     // Estudiantes que NO entregaron este ejercicio
     const entregaron = new Set(entregas.map(e => e.usuario))
@@ -356,10 +407,12 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
     })
   }
 
+  // Si no hay ejercicios creados, no hay nada que analizar.
   if (!ejercicios.length) return <div style={estilos.cargando}>Aún no hay ejercicios creados.</div>
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Selector del ejercicio a analizar. */}
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <label style={{ fontSize: 13, color: "#8b949e", fontWeight: 600 }}>Ejercicio:</label>
         <SelectorEjercicioA ejercicios={ejercicios} statsPorEj={statsPorEj} value={ejId} onChange={setEjId} />
@@ -375,6 +428,7 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
         </div>
       )}
 
+      {/* Tarjetas de métricas: entregas, resultado medio, tiempo mediano e ítem más fallado. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
         <div style={estilos.cajaMetrica}>
           <span style={estilos.cajaLabel}>Entregas</span>
@@ -402,6 +456,7 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
         </div>
       </div>
 
+      {/* Barra de controles: filtros (todas/pendientes/evaluadas), orden y botones de exportación. */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {[{ val: "todas", label: "Todas" }, { val: "pendientes", label: `Pendientes${stats.pendientes ? ` (${stats.pendientes})` : ""}` }, { val: "evaluadas", label: "Evaluadas" }].map(({ val, label }) => (
           <button key={val} onClick={() => setFiltro(val)} style={{ ...estilos.btnPag, ...(filtro === val ? { background: "#2997ff", color: "#fff", borderColor: "#2997ff" } : {}) }}>{label}</button>
@@ -422,6 +477,7 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
           {entregas.length === 0 ? "Ningún estudiante ha entregado este ejercicio aún." : "Sin entregas para el filtro seleccionado."}
         </div>
       )}
+      {/* Lista de entregas visibles (cada una abre su modal o exporta su PDF). */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {visibles.map(en => (
           <FilaEntrega key={en.id} etiqueta={en.usuario} sub={formatFecha(en.fecha_entrega)} en={en}
@@ -429,6 +485,7 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
         ))}
       </div>
 
+      {/* Modal de detalle (solo lectura) de la entrega seleccionada. */}
       {modalId != null && (
         <ModalEntrega entregaId={modalId} soloLectura onCerrar={() => setModalId(null)} />
       )}
@@ -439,13 +496,17 @@ function VistaPorEjercicio({ ejercicios, estudiantes, statsPorEj }) {
 // ═══════════════════════════════════════════════════════════════════
 // VISTA — POR ESTUDIANTE
 // ═══════════════════════════════════════════════════════════════════
+// Lista buscable de estudiantes; al elegir uno muestra todas sus entregas
+// agrupadas por nivel, un resumen (nota promedio, entregadas, pendientes) y
+// permite exportar su reporte PDF individual.
 function VistaPorEstudiante({ estudiantes, ejerciciosPublicados }) {
-  const [busqueda, setBusqueda] = useState("")
+  const [busqueda, setBusqueda] = useState("")  // texto de búsqueda de estudiantes
   const [sel, setSel] = useState(null)          // estudiante seleccionado
-  const [entregas, setEntregas] = useState([])
+  const [entregas, setEntregas] = useState([])  // entregas del estudiante elegido
   const [cargando, setCargando] = useState(false)
-  const [modalId, setModalId] = useState(null)
+  const [modalId, setModalId] = useState(null)  // entrega abierta en el modal
 
+  // Carga las entregas de un estudiante desde el backend.
   const cargar = useCallback((nombreUsuario) => {
     setCargando(true)
     fetch(`${API_URL}/docente/estudiante/${encodeURIComponent(nombreUsuario)}/entregas`, { headers: getAuthHeaders() })
@@ -455,8 +516,10 @@ function VistaPorEstudiante({ estudiantes, ejerciciosPublicados }) {
       .finally(() => setCargando(false))
   }, [])
 
+  // Cuando se selecciona un estudiante, carga sus entregas.
   useEffect(() => { if (sel) cargar(sel.nombre_usuario) }, [sel, cargar])
 
+  // Filtra los estudiantes por nombre o nombre de usuario según la búsqueda.
   const filtrados = estudiantes.filter(u =>
     (u.nombre || "").toLowerCase().includes(busqueda.trim().toLowerCase()) ||
     (u.nombre_usuario || "").toLowerCase().includes(busqueda.trim().toLowerCase()))
@@ -468,6 +531,7 @@ function VistaPorEstudiante({ estudiantes, ejerciciosPublicados }) {
     return m
   }, [entregas])
 
+  // Resumen del alumno: nota promedio, resultado medio, entregadas y pendientes.
   const resumenAlumno = useMemo(() => {
     const notas = entregas.filter(e => e.nota != null).map(e => e.nota)
     const finales = entregas.map(e => e.resumen?.porcentaje_final).filter(v => v != null)
@@ -480,6 +544,8 @@ function VistaPorEstudiante({ estudiantes, ejerciciosPublicados }) {
     }
   }, [entregas])
 
+  // Exporta el reporte PDF del estudiante con todos los ejercicios publicados,
+  // indicando para cada uno si lo entregó, su resultado y su nota.
   const exportarReporteAlumno = () => {
     const porEjId = {}
     entregas.forEach(en => { porEjId[en.ejercicio_id] = en })
@@ -519,6 +585,7 @@ function VistaPorEstudiante({ estudiantes, ejerciciosPublicados }) {
   }
 
   // ── Lista de estudiantes ──
+  // Si no hay estudiante seleccionado, se muestra la grilla buscable de tarjetas.
   if (!sel) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -549,6 +616,7 @@ function VistaPorEstudiante({ estudiantes, ejerciciosPublicados }) {
   }
 
   // ── Detalle de un estudiante ──
+  // Con un estudiante seleccionado, se listan sus entregas agrupadas por nivel.
   const niveles = Object.keys(porNivel).map(Number).sort((a, b) => a - b)
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -599,19 +667,25 @@ function VistaPorEstudiante({ estudiantes, ejerciciosPublicados }) {
 // ═══════════════════════════════════════════════════════════════════
 // PÁGINA — EXPORTAR
 // ═══════════════════════════════════════════════════════════════════
+// Componente principal de la página. Carga ejercicios, estudiantes y todas las
+// entregas; calcula el promedio del curso y ofrece todas las exportaciones.
 export default function ExportarPage() {
-  const [ejercicios, setEjercicios] = useState([])
-  const [estudiantes, setEstudiantes] = useState([])
-  const [entregasGlobal, setEntregasGlobal] = useState([])
-  const [cargando, setCargando] = useState(true)
-  const [error, setError] = useState("")
-  const [vista, setVista] = useState("estudiante")
-  const [tabPrincipal, setTabPrincipal] = useState("informes")
-  const [estudiantePDFSel, setEstudiantePDFSel] = useState("")
+  // --- Datos cargados desde el backend ---
+  const [ejercicios, setEjercicios] = useState([])         // todos los ejercicios (incl. borradores)
+  const [estudiantes, setEstudiantes] = useState([])       // estudiantes registrados
+  const [entregasGlobal, setEntregasGlobal] = useState([]) // todas las entregas del curso
+  const [cargando, setCargando] = useState(true)           // cargando datos iniciales
+  const [error, setError] = useState("")                   // mensaje de error de carga
+  // --- Estado de la interfaz ---
+  const [vista, setVista] = useState("estudiante")         // sub-vista de informes: estudiante | ejercicio
+  const [tabPrincipal, setTabPrincipal] = useState("informes") // pestaña: informes | notas
+  const [estudiantePDFSel, setEstudiantePDFSel] = useState("")  // estudiante elegido para el PDF individual
+  // Filtros en cascada (modo → nivel → ejercicio) para "Notas por ejercicio".
   const [modoFiltro, setModoFiltro] = useState("ataque")
   const [nivelFiltro, setNivelFiltro] = useState(null)
   const [ejercicioFiltroId, setEjercicioFiltroId] = useState(null)
 
+  // Carga en paralelo ejercicios, usuarios y entregas, e inicializa los filtros.
   const cargarTodo = useCallback(() => {
     const h = getAuthHeaders()
     Promise.all([
@@ -622,8 +696,8 @@ export default function ExportarPage() {
       const ejArr = Array.isArray(ej) ? ej : (ej?.ejercicios || [])
       setEjercicios(ejArr)
       // Inicializar filtros modo/nivel/ejercicio en cascada
-      const publicados = ejArr.filter(e => e.activo !== false)
-      const modo0 = publicados.find(e => e.tipo)?.tipo || "ataque"
+      const publicados = ejArr.filter(e => e.activo !== false) // solo los publicados (no borradores)
+      const modo0 = publicados.find(e => e.tipo)?.tipo || "ataque" // primer modo disponible
       setModoFiltro(modo0)
       const niveles = [...new Set(publicados.filter(e => e.tipo === modo0).map(e => e.nivel).filter(Boolean))].sort((a, b) => a - b)
       if (niveles.length) {
@@ -632,18 +706,21 @@ export default function ExportarPage() {
         const ej0 = publicados.find(e => e.tipo === modo0 && e.nivel === n0)
         if (ej0) setEjercicioFiltroId(ej0.id)
       }
-      const ests = Array.isArray(us) ? us.filter(u => u.rol === "estudiante") : []
+      const ests = Array.isArray(us) ? us.filter(u => u.rol === "estudiante") : [] // solo estudiantes
       setEstudiantes(ests)
-      if (ests.length) setEstudiantePDFSel(ests[0].nombre_usuario)
+      if (ests.length) setEstudiantePDFSel(ests[0].nombre_usuario) // preselecciona el primero
       setEntregasGlobal(en?.entregas || [])
     }).catch(() => setError("No se pudieron cargar los datos"))
       .finally(() => setCargando(false))
   }, [])
 
+  // Carga los datos una vez al montar.
   useEffect(() => { cargarTodo() }, [cargarTodo])
 
+  // Solo los ejercicios publicados (excluye borradores) — base de casi todos los cálculos.
   const ejerciciosPublicados = useMemo(() => ejercicios.filter(e => e.activo !== false), [ejercicios])
 
+  // Mapa { ejercicio_id: {entregas, pendientes} } para los chips del selector.
   const statsPorEj = useMemo(() => {
     const m = {}
     entregasGlobal.forEach(en => {
@@ -656,6 +733,7 @@ export default function ExportarPage() {
   }, [entregasGlobal])
 
   // ── Filtros modo/nivel/ejercicio en cascada ───────────────────────
+  // Cada filtro depende del anterior: modo → niveles de ese modo → ejercicios de ese nivel.
   const ejerciciosPorModo = useMemo(() =>
     modoFiltro ? ejerciciosPublicados.filter(e => e.tipo === modoFiltro) : ejerciciosPublicados,
     [ejerciciosPublicados, modoFiltro]
@@ -672,6 +750,7 @@ export default function ExportarPage() {
     ejerciciosPublicados.find(e => e.id === ejercicioFiltroId) || null,
     [ejerciciosPublicados, ejercicioFiltroId]
   )
+  // Al cambiar el modo: resetea nivel y ejercicio al primero disponible del nuevo modo.
   const handleModoChange = (modo) => {
     setModoFiltro(modo)
     const ejsModo = ejerciciosPublicados.filter(e => e.tipo === modo)
@@ -681,13 +760,45 @@ export default function ExportarPage() {
     const ej0 = ejsModo.find(e => e.nivel === n0)
     setEjercicioFiltroId(ej0?.id ?? null)
   }
+  // Al cambiar el nivel: selecciona el primer ejercicio de ese nivel.
   const handleNivelChange = (n) => {
     setNivelFiltro(n)
     const ej0 = ejerciciosPorModo.find(e => e.nivel === n)
     if (ej0) setEjercicioFiltroId(ej0.id)
   }
 
+  // ── Modelo de nota del curso ──────────────────────────────────────
+  // Cada ejercicio publicado cuenta para el promedio: si está evaluado se
+  // usa su nota; si el estudiante NO lo entregó cuenta como 1.0 (reprobado).
+  // Los entregados aún sin evaluar no puntúan hasta que el docente los
+  // califique (no se penaliza al alumno por una corrección pendiente).
+  const NOTA_NO_ENTREGADO = 1.0
+  const promedioCurso = (ensEstudiante) => {
+    if (!ejerciciosPublicados.length) return null
+    let suma = 0, cuentan = 0
+    ejerciciosPublicados.forEach(ej => {
+      const e = ensEstudiante.find(x => x.ejercicio_id === ej.id)
+      if (e && e.nota != null) { suma += e.nota; cuentan++ }      // evaluado
+      else if (!e) { suma += NOTA_NO_ENTREGADO; cuentan++ }       // no entregado → 1.0
+      // entregado sin evaluar: se omite hasta que el docente lo califique
+    })
+    return cuentan ? suma / cuentan : null
+  }
+  const promFmt  = (p) => (p == null ? "—" : p.toFixed(1))                              // formatea el promedio (1 decimal)
+  const estadoDe = (p) => (p == null ? "Pendiente" : (p >= 4 ? "Aprobado" : "Reprobado")) // estado según la nota (≥4 aprueba)
+  const nombreDe = (nu) => estudiantes.find(x => x.nombre_usuario === nu)?.nombre || nu  // nombre real desde el usuario
+  const correoDe = (nu) => estudiantes.find(x => x.nombre_usuario === nu)?.correo || "—" // correo desde el usuario
+  // Cantidad de ejercicios PUBLICADOS (distintos) que el estudiante entregó.
+  // Se cuenta solo sobre los publicados para que "Entregadas" y "Sin entregar"
+  // sean coherentes con el total del curso (no con entregas sueltas o de
+  // ejercicios despublicados).
+  const entregadasPublicadas = (ensEstudiante) => {
+    const idsPub = new Set(ejerciciosPublicados.map(e => e.id))
+    return new Set(ensEstudiante.filter(e => idsPub.has(e.ejercicio_id)).map(e => e.ejercicio_id)).size
+  }
+
   // ── Reporte general del curso (PDF) ──────────────────────────────
+  // Arma el PDF resumen del curso: métricas globales + tablas por ejercicio y por estudiante.
   const reporteGeneral = () => {
     const totalEst = estudiantes.length
     const totalEj  = ejerciciosPublicados.length
@@ -711,12 +822,11 @@ export default function ExportarPage() {
     const porEst = estudiantes.map(u => {
       const ens = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
       const finales = ens.map(e => e.porcentaje).filter(v => v != null)
-      const ns = ens.filter(e => e.nota != null).map(e => e.nota)
       return {
         "Estudiante": u.nombre || u.nombre_usuario,
         "Entregas": `${ens.length} / ${totalEj}`,
         "Result. medio": finales.length ? `${Math.round(finales.reduce((s, v) => s + v, 0) / finales.length)}%` : "—",
-        "Nota prom.": ns.length ? (ns.reduce((s, n) => s + n, 0) / ns.length).toFixed(1) : "—",
+        "Nota prom.": promFmt(promedioCurso(ens)),
       }
     }).sort((a, b) => (parseFloat(b["Nota prom."]) || -1) - (parseFloat(a["Nota prom."]) || -1))
 
@@ -758,12 +868,14 @@ export default function ExportarPage() {
     })
   }
 
-  // ── CSV — Notas terminales ────────────────────────────────────────
+  // ── CSV — Notas por entrega ───────────────────────────────────────
+  // Exporta a CSV todas las entregas con su nota, resultado, estado y fecha.
   const csvNotasTerminales = () => {
     const filas = entregasGlobal.map(e => {
       const ej = ejerciciosPublicados.find(x => x.id === e.ejercicio_id) || {}
       return {
-        "Estudiante":   e.usuario,
+        "Estudiante":   nombreDe(e.usuario),
+        "Correo":       correoDe(e.usuario),
         "Ejercicio":    ej.titulo || `#${e.ejercicio_id}`,
         "Nivel":        ej.nivel ? `N${ej.nivel}` : "—",
         "Tipo":         ej.tipo || "—",
@@ -773,47 +885,39 @@ export default function ExportarPage() {
         "Fecha":        formatFecha(e.fecha_entrega),
       }
     })
-    descargarCSV(filas, "notas-terminales.csv")
+    descargarCSV(filas, "notas-por-entrega.csv")
   }
 
   // ── CSV — Lista estudiantes ───────────────────────────────────────
+  // Exporta a CSV la lista de estudiantes con nombre, correo y fecha de registro.
   const csvListaEstudiantes = () => {
-    const filas = estudiantes.map(u => {
-      const ens = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
-      const ns  = ens.filter(e => e.nota != null).map(e => e.nota)
-      const prom = ns.length ? (ns.reduce((s, n) => s + n, 0) / ns.length).toFixed(1) : "—"
-      return {
-        "Usuario":            u.nombre_usuario,
-        "Nombre":             u.nombre || u.nombre_usuario,
-        "Correo":             u.correo || "—",
-        "Entregas":           `${ens.length} / ${ejerciciosPublicados.length}`,
-        "Nota promedio":      prom,
-        "Estado":             prom !== "—" ? (parseFloat(prom) >= 4 ? "Aprobado" : "Reprobado") : "Pendiente",
-      }
-    })
+    const filas = estudiantes.map(u => ({
+      "Nombre":            u.nombre || u.nombre_usuario,
+      "Correo":            u.correo || "—",
+      "Fecha de creación": formatFecha(u.fecha_creacion),
+    }))
     descargarCSV(filas, "lista-estudiantes.csv")
   }
 
   // ── CSV — Resumen aprobación ──────────────────────────────────────
+  // Exporta a CSV, por estudiante, sus entregas y el estado final del curso.
   const csvResumenAprobacion = () => {
     const filas = estudiantes.map(u => {
-      const ens      = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
-      const evaluadas = ens.filter(e => e.nota != null)
-      const ns       = evaluadas.map(e => e.nota)
-      const prom     = ns.length ? (ns.reduce((s, n) => s + n, 0) / ns.length).toFixed(1) : "—"
+      const ens        = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
+      const entregadas = entregadasPublicadas(ens)
       return {
-        "Estudiante":    u.nombre || u.nombre_usuario,
-        "Aprobados":     evaluadas.filter(e => e.nota >= 4).length,
-        "Reprobados":    evaluadas.filter(e => e.nota < 4).length,
-        "Sin entregar":  Math.max(0, ejerciciosPublicados.length - ens.length),
-        "Nota promedio": prom,
-        "Estado final":  prom !== "—" ? (parseFloat(prom) >= 4 ? "Aprobado" : "Reprobado") : "Pendiente",
+        "Estudiante":   u.nombre || u.nombre_usuario,
+        "Correo":       u.correo || "—",
+        "Entregadas":   `${entregadas} / ${ejerciciosPublicados.length}`,
+        "Sin entregar": Math.max(0, ejerciciosPublicados.length - entregadas),
+        "Estado final": estadoDe(promedioCurso(ens)),
       }
     })
     descargarCSV(filas, "resumen-aprobacion.csv")
   }
 
   // ── PDF — Notas del curso completo ───────────────────────────────
+  // PDF con una fila por (estudiante × ejercicio): nota, resultado y estado.
   const pdfNotasCurso = () => {
     const filas = []
     estudiantes.forEach(u => {
@@ -847,6 +951,7 @@ export default function ExportarPage() {
   }
 
   // ── PDF — Notas individual por estudiante ─────────────────────────
+  // PDF personal del estudiante elegido: nota por ejercicio, promedio y estado final.
   const pdfNotasIndividual = () => {
     const u = estudiantes.find(x => x.nombre_usuario === estudiantePDFSel)
     if (!u) return
@@ -863,16 +968,16 @@ export default function ExportarPage() {
     })
     const ens  = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
     const ns   = ens.filter(e => e.nota != null).map(e => e.nota)
-    const prom = ns.length ? (ns.reduce((s, n) => s + n, 0) / ns.length).toFixed(1) : "—"
-    const color = prom !== "—" ? (parseFloat(prom) >= 4 ? "#15803d" : "#b91c1c") : undefined
+    const prom = promedioCurso(ens)
+    const color = prom == null ? undefined : (prom >= 4 ? "#15803d" : "#b91c1c")
     abrirReporteImprimible({
       titulo:    `Notas — ${u.nombre || u.nombre_usuario}`,
       subtitulo: u.correo || "",
       resumen: [
         { label: "Entregas",     valor: `${ens.length} / ${ejerciciosPublicados.length}` },
         { label: "Aprobados",    valor: ns.filter(n => n >= 4).length, color: "#15803d" },
-        { label: "Nota promedio", valor: prom, color },
-        { label: "Estado final", valor: prom !== "—" ? (parseFloat(prom) >= 4 ? "Aprobado" : "Reprobado") : "Pendiente", color },
+        { label: "Nota promedio", valor: promFmt(prom), color },
+        { label: "Estado final", valor: estadoDe(prom), color },
       ],
       columnas: [
         { key: "Ejercicio", label: "Ejercicio" },
@@ -886,12 +991,14 @@ export default function ExportarPage() {
     })
   }
 
-  // ── PDF — Notas terminales ────────────────────────────────────────
+  // ── PDF — Notas por entrega ───────────────────────────────────────
+  // Versión PDF de "Notas por entrega" (todas las entregas con su calificación).
   const pdfNotasTerminales = () => {
     const filas = entregasGlobal.map(e => {
       const ej = ejerciciosPublicados.find(x => x.id === e.ejercicio_id) || {}
       return {
-        "Estudiante": e.usuario,
+        "Estudiante": nombreDe(e.usuario),
+        "Correo":     correoDe(e.usuario),
         "Ejercicio":  ej.titulo || `#${e.ejercicio_id}`,
         "Nivel":      ej.nivel ? `N${ej.nivel}` : "—",
         "Tipo":       ej.tipo || "—",
@@ -902,9 +1009,10 @@ export default function ExportarPage() {
       }
     })
     abrirReporteImprimible({
-      titulo: "Notas terminales", subtitulo: "Todos los intentos con sus calificaciones",
+      titulo: "Notas por entrega", subtitulo: "Todas las entregas con su calificación",
       columnas: [
         { key: "Estudiante", label: "Estudiante" },
+        { key: "Correo",     label: "Correo" },
         { key: "Ejercicio",  label: "Ejercicio" },
         { key: "Nivel",      label: "Nivel",     align: "center" },
         { key: "Tipo",       label: "Tipo" },
@@ -918,63 +1026,54 @@ export default function ExportarPage() {
   }
 
   // ── PDF — Lista estudiantes ───────────────────────────────────────
+  // Versión PDF de la lista de estudiantes registrados.
   const pdfListaEstudiantes = () => {
-    const filas = estudiantes.map(u => {
-      const ens  = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
-      const ns   = ens.filter(e => e.nota != null).map(e => e.nota)
-      const prom = ns.length ? (ns.reduce((s, n) => s + n, 0) / ns.length).toFixed(1) : "—"
-      return {
-        "Nombre":        u.nombre || u.nombre_usuario,
-        "Correo":        u.correo || "—",
-        "Entregas":      `${ens.length} / ${ejerciciosPublicados.length}`,
-        "Nota promedio": prom,
-        "Estado":        prom !== "—" ? (parseFloat(prom) >= 4 ? "Aprobado" : "Reprobado") : "Pendiente",
-      }
-    })
+    const filas = estudiantes.map(u => ({
+      "Nombre":            u.nombre || u.nombre_usuario,
+      "Correo":            u.correo || "—",
+      "Fecha de creación": formatFecha(u.fecha_creacion),
+    }))
     abrirReporteImprimible({
       titulo: "Lista de estudiantes", subtitulo: `${estudiantes.length} estudiantes registrados`,
       columnas: [
-        { key: "Nombre",        label: "Nombre" },
-        { key: "Correo",        label: "Correo" },
-        { key: "Entregas",      label: "Entregas",      align: "center" },
-        { key: "Nota promedio", label: "Nota promedio", align: "center", formato: "nota" },
-        { key: "Estado",        label: "Estado",        align: "center", formato: "estado" },
+        { key: "Nombre",            label: "Nombre" },
+        { key: "Correo",            label: "Correo" },
+        { key: "Fecha de creación", label: "Fecha de creación" },
       ],
       filas,
     })
   }
 
   // ── PDF — Resumen aprobación ──────────────────────────────────────
+  // Versión PDF del resumen de aprobación por estudiante.
   const pdfResumenAprobacion = () => {
     const filas = estudiantes.map(u => {
-      const ens      = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
-      const evaluadas = ens.filter(e => e.nota != null)
-      const ns       = evaluadas.map(e => e.nota)
-      const prom     = ns.length ? (ns.reduce((s, n) => s + n, 0) / ns.length).toFixed(1) : "—"
+      const ens        = entregasGlobal.filter(e => e.usuario === u.nombre_usuario)
+      const entregadas = entregadasPublicadas(ens)
       return {
-        "Estudiante":    u.nombre || u.nombre_usuario,
-        "Aprobados":     evaluadas.filter(e => e.nota >= 4).length,
-        "Reprobados":    evaluadas.filter(e => e.nota < 4).length,
-        "Sin entregar":  Math.max(0, ejerciciosPublicados.length - ens.length),
-        "Nota promedio": prom,
-        "Estado final":  prom !== "—" ? (parseFloat(prom) >= 4 ? "Aprobado" : "Reprobado") : "Pendiente",
+        "Estudiante":   u.nombre || u.nombre_usuario,
+        "Correo":       u.correo || "—",
+        "Entregadas":   `${entregadas} / ${ejerciciosPublicados.length}`,
+        "Sin entregar": Math.max(0, ejerciciosPublicados.length - entregadas),
+        "Estado final": estadoDe(promedioCurso(ens)),
       }
     })
     abrirReporteImprimible({
-      titulo: "Resumen de aprobación", subtitulo: "Por estudiante: aprobados, reprobados y promedio",
+      titulo: "Resumen de aprobación", subtitulo: "Por estudiante: entregas y estado final",
       columnas: [
-        { key: "Estudiante",    label: "Estudiante" },
-        { key: "Aprobados",     label: "Aprobados",     align: "center" },
-        { key: "Reprobados",    label: "Reprobados",    align: "center" },
-        { key: "Sin entregar",  label: "Sin entregar",  align: "center" },
-        { key: "Nota promedio", label: "Nota promedio", align: "center", formato: "nota" },
-        { key: "Estado final",  label: "Estado final",  align: "center", formato: "estado" },
+        { key: "Estudiante",   label: "Estudiante" },
+        { key: "Correo",       label: "Correo" },
+        { key: "Entregadas",   label: "Entregadas",   align: "center" },
+        { key: "Sin entregar", label: "Sin entregar", align: "center" },
+        { key: "Estado final", label: "Estado final", align: "center", formato: "estado" },
       ],
       filas,
     })
   }
 
   // ── CSV/PDF — Notas por ejercicio ────────────────────────────────
+  // Filas (un estudiante por fila) con su nota en el ejercicio filtrado;
+  // base común para exportar ese ejercicio a CSV o PDF.
   const filasNotasPorEjercicio = () => {
     if (!ejercicioSeleccionado) return []
     return estudiantes.map(u => {
@@ -990,12 +1089,14 @@ export default function ExportarPage() {
     })
   }
 
+  // Exporta a CSV las notas del ejercicio filtrado.
   const csvNotasPorEjercicio = () => {
     const filas = filasNotasPorEjercicio()
     if (!filas.length || !ejercicioSeleccionado) return
     descargarCSV(filas, `notas-${ejercicioSeleccionado.titulo.toLowerCase().replace(/\s+/g, "-").slice(0, 40)}.csv`)
   }
 
+  // Exporta a PDF las notas del ejercicio filtrado, con un resumen (promedio, sin entregar…).
   const pdfNotasPorEjercicio = () => {
     const filas = filasNotasPorEjercicio()
     if (!filas.length || !ejercicioSeleccionado) return
@@ -1023,6 +1124,7 @@ export default function ExportarPage() {
   }
 
   // ── Estilos internos ─────────────────────────────────────────────
+  // Helper que renderiza una etiqueta de color (ej: "CSV", "PDF") con su paleta.
   const badge = (txt, color, bg, bd) => (
     <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 6,
       color, background: bg, border: `1px solid ${bd}`, whiteSpace: "nowrap" }}>{txt}</span>
@@ -1054,9 +1156,11 @@ export default function ExportarPage() {
             ))}
           </div>
 
+          {/* Mientras carga muestra "Cargando…"; si falla, el error; si no, el contenido. */}
           {cargando ? <div style={estilos.cargando}>Cargando…</div> : error ? <div style={estilos.errorMsg}>{error}</div> : (
             <>
-              {/* ══════════════ TAB: INFORMES ══════════════ */}
+              {/* ══════════════ TAB: INFORMES ══════════════
+                  Reporte general + sub-vistas de análisis (por estudiante / por ejercicio). */}
               {tabPrincipal === "informes" && (
                 <>
                   {/* Card reporte PDF general */}
@@ -1088,15 +1192,16 @@ export default function ExportarPage() {
                 </>
               )}
 
-              {/* ══════════════ TAB: NOTAS ══════════════ */}
+              {/* ══════════════ TAB: NOTAS ══════════════
+                  Tarjetas con descargas rápidas en CSV y PDF. */}
               {tabPrincipal === "notas" && (
                 <>
-                  {/* Fila 1 — 3 tarjetas CSV */}
+                  {/* Fila 1 — 3 tarjetas: notas por entrega, lista de estudiantes y resumen de aprobación. */}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16, marginBottom: 20 }}>
                     {[
                       {
-                        icono: "📊", titulo: "Notas terminales",
-                        desc: "Todos los intentos con sus calificaciones",
+                        icono: "📊", titulo: "Notas por entrega",
+                        desc: "Todas las entregas con su calificación",
                         color: "#22d3ee", accionCSV: csvNotasTerminales, accionPDF: pdfNotasTerminales,
                       },
                       {
@@ -1132,10 +1237,10 @@ export default function ExportarPage() {
                     ))}
                   </div>
 
-                  {/* Fila 2 — tarjeta notas por ejercicio + tarjeta notas individuales */}
+                  {/* Fila 2 — dos tarjetas: notas por ejercicio (con filtros en cascada) y PDF individual. */}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
 
-                    {/* Notas por ejercicio con filtros */}
+                    {/* Notas por ejercicio con filtros (Modo → Nivel → Ejercicio) */}
                     <div style={{ ...estilos.card, borderTop: "3px solid #818cf8" }}>
                       <div style={{ fontSize: 26, marginBottom: 10 }}>📄</div>
                       <div style={{ fontWeight: 700, color: "#f0f6fc", fontSize: 14, marginBottom: 4 }}>Notas por ejercicio</div>
@@ -1227,6 +1332,8 @@ export default function ExportarPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Objeto con los estilos reutilizables de la página (tarjetas, inputs, botones,
+// cajas de métricas, etc.) para no repetir los mismos objetos de estilo inline.
 const estilos = {
   cargando: { color: "#8b949e", textAlign: "center", padding: 60, fontSize: 14 },
   errorMsg: { color: "#f87171", textAlign: "center", padding: 40, fontSize: 14, background: "rgba(248,81,73,0.08)", borderRadius: 10 },
